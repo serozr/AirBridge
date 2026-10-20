@@ -287,41 +287,19 @@ async def websocket_signaling(websocket: WebSocket):
     client_ip = websocket.client.host if websocket.client else "unknown"
     client_addr = f"{client_ip}:{websocket.client.port}" if websocket.client else "unknown"
 
-    token = websocket.query_params.get("token")
-    authenticated = False
-
-    if token:
-        if security_manager.validate_token(token, client_ip):
-            authenticated = True
-        else:
-            logger.warning("WebSocket rejected: invalid or expired query token from %s", client_addr)
-            await websocket.close(code=4401, reason="Invalid or Expired Token")
-            return
-
     await websocket.accept()
 
-    # If not authenticated via query parameter, require immediate auth handshake message
-    if not authenticated:
+    # Enforce strict in-band authentication handshake (tokens never accepted via query string)
+    if security_manager.enabled:
         try:
             raw_auth = await asyncio.wait_for(websocket.receive_text(), timeout=5.0)
             auth_msg = json.loads(raw_auth)
             if auth_msg.get("type") == "auth":
                 msg_token = auth_msg.get("token")
-                msg_pin = auth_msg.get("pin")
                 if msg_token and security_manager.validate_token(msg_token, client_ip):
-                    authenticated = True
-                    await websocket.send_json({"type": "auth_ok", "token": msg_token})
-                elif msg_pin:
-                    valid, new_token, err = security_manager.verify_pin(msg_pin, client_ip)
-                    if valid and new_token:
-                        authenticated = True
-                        await websocket.send_json({"type": "auth_ok", "token": new_token})
-                    else:
-                        await websocket.send_json({"type": "auth_fail", "error": err or "Invalid PIN"})
-                        await websocket.close(code=4401, reason="Authentication Failed")
-                        return
+                    await websocket.send_json({"type": "auth_ok"})
                 else:
-                    await websocket.send_json({"type": "auth_fail", "error": "Invalid auth payload"})
+                    await websocket.send_json({"type": "auth_fail", "error": "Invalid or expired token"})
                     await websocket.close(code=4401, reason="Authentication Failed")
                     return
             else:

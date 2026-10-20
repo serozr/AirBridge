@@ -8,7 +8,7 @@
 [![WebRTC](https://img.shields.io/badge/WebRTC-aiortc-brightgreen.svg)](https://github.com/aiortc/aiortc)
 [![Signaling](https://img.shields.io/badge/Signaling-FastAPI%20%2F%20WebSocket-009688.svg)](https://fastapi.tiangolo.com/)
 [![CI](https://github.com/serozr/AirBridge/actions/workflows/ci.yml/badge.svg)](https://github.com/serozr/AirBridge/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/Tests-43%20passed-success.svg)]()
+[![Tests](https://img.shields.io/badge/Tests-47%20passed-success.svg)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ---
@@ -156,6 +156,7 @@ tests/test_connection_manager.py::test_recovery_cancelled_when_last_client_leave
 tests/test_connection_manager.py::test_heartbeat_updates_last_seen PASSED
 tests/test_multi_peer_signaling.py::test_two_simultaneous_webrtc_peers_receive_audio PASSED
 tests/test_security.py::test_valid_token_authentication PASSED
+tests/test_security.py::test_token_rejected_from_wrong_ip PASSED
 tests/test_security.py::test_invalid_token_rejected PASSED
 tests/test_security.py::test_missing_token_rejected PASSED
 tests/test_security.py::test_expired_token_rejected PASSED
@@ -163,16 +164,19 @@ tests/test_security.py::test_valid_pin_generates_token PASSED
 tests/test_security.py::test_invalid_pin_rejected PASSED
 tests/test_security.py::test_rate_limit PASSED
 tests/test_security.py::test_rate_limit_reset_on_success PASSED
+tests/test_security.py::test_rate_limiter_state_cleanup PASSED
 tests/test_security.py::test_session_rotation PASSED
-tests/test_security.py::test_origin_validation PASSED
+tests/test_security.py::test_origin_missing_policy PASSED
+tests/test_security.py::test_host_origin_scheme_port_validation PASSED
+tests/test_security.py::test_configured_origin_exact_match PASSED
+tests/test_security.py::test_sensitive_credentials_not_logged PASSED
 tests/test_security.py::test_unauthenticated_websocket_rejected PASSED
-tests/test_security.py::test_invalid_token_websocket_rejected PASSED
-tests/test_security.py::test_unauthorized_origin_websocket_rejected PASSED
-tests/test_security.py::test_valid_token_websocket_accepted PASSED
-tests/test_security.py::test_api_auth_endpoint_full_flow PASSED
+tests/test_security.py::test_token_not_accepted_in_query_string PASSED
+tests/test_security.py::test_in_band_auth_websocket_flow PASSED
+tests/test_security.py::test_api_auth_with_testclient PASSED
 tests/test_webrtc_pipeline.py::test_pipeline_to_webrtc_track_integration PASSED
 tests/test_webrtc_pipeline.py::test_webrtc_track_consecutive_underruns_and_recovery PASSED
-============================= 43 passed in 4.78s ==============================
+============================= 47 passed in 4.72s ==============================
 ```
 
 > [!NOTE]
@@ -180,14 +184,23 @@ tests/test_webrtc_pipeline.py::test_webrtc_track_consecutive_underruns_and_recov
 
 ---
 
-## 🔐 Security Architecture (v0.3.0)
+## 🔐 Security Architecture & Threat Model (v0.3.0)
 
-AirBridge incorporates a dedicated zero-trust local network security layer:
+AirBridge includes an application-layer access control and validation suite designed for trusted local area networks:
 
-- **Pairing PIN Verification:** A 6-digit numeric PIN generated on each server run protects against unauthorized LAN eavesdropping. Constant-time comparison (`hmac.compare_digest`) prevents timing attacks.
-- **Cryptographic Session Tokens:** Authenticated peers receive 32-byte URL-safe cryptographic tokens. WebSocket signaling and SDP offer/answer exchanges strictly reject unauthenticated connections (HTTP 401 / WS 4401).
-- **IP Brute-Force Rate Limiting:** Failed PIN verification attempts are tracked per IP address. Exceeding 3 failed attempts temporarily locks out the offending address (HTTP 429).
-- **Origin & Host Validation:** Prevents Cross-Site WebSocket Hijacking (CSWSH) by restricting signaling requests to private RFC-1918 networks, localhost, `.local` mDNS, and whitelisted origins.
+- **Pairing PIN Verification:** A 6-digit numeric PIN generated per server instance restricts access to authorized users in the room. Constant-time comparison (`hmac.compare_digest`) prevents timing side-channels. PINs are entered strictly via the web UI and are never accepted or transmitted via URL query parameters.
+- **Cryptographic Session Tokens & Client IP Binding:** Authenticated peers receive 32-byte URL-safe cryptographic tokens. Tokens are bound to the client's IP address upon PIN verification; requests presenting a token from a different IP address are rejected.
+- **In-Band WebSocket Authentication:** Tokens are never passed in the WebSocket URL (`ws://.../ws`), preventing leakage in server access logs or proxy histories. Authentication is performed in-band via an immediate initial `{"type": "auth", "token": "..."}` handshake message before any SDP signaling or media dispatch is accepted.
+- **IP Brute-Force Rate Limiting:** Failed PIN verification attempts are rate-limited per IP address (3 failed attempts within a 60-second window triggers a temporary lockout with HTTP 429). Expired rate limiter state is pruned periodically to prevent memory exhaustion.
+- **Origin & Host Validation:** Prevents Cross-Site WebSocket Hijacking (CSWSH). Incoming browser requests must originate from matching schemes, hostnames, and ports corresponding to the server's `Host` header (supporting both IPv4 and IPv6), or explicitly configured allowlist origins.
+
+### ⚠️ Threat Model & Network Security Considerations
+
+> [!WARNING]
+> **Plaintext LAN Transport:** By default, AirBridge serves HTTP and unencrypted WebSockets (`ws://`) over port 8000. While PIN and token authentication prevent unauthorized browser signaling on the LAN, **traffic is unencrypted over the physical network**. An adversary with network sniffing access on the local Wi-Fi (e.g. unencrypted Wi-Fi or ARP spoofing) can intercept session tokens and audio packets. AirBridge does **not** provide wire-level encryption or "zero-trust" security out-of-the-box.
+
+- **Local Network Scope:** Port 8000 is intended **strictly for private, trusted home/office LANs**. It must **never** be exposed directly to the public internet or forwarded via UPnP/router port-forwarding.
+- **When TLS / HTTPS is Required:** If you stream across untrusted networks, corporate Wi-Fi, or require encryption in transit, AirBridge must be run behind a reverse proxy (such as Caddy, Nginx, or Traefik) terminating TLS with a valid certificate. This upgrades all signaling to HTTPS and `wss://`.
 
 If necessary to permit local inbound traffic across Windows Defender Firewall, run PowerShell as Administrator:
 
@@ -220,7 +233,7 @@ AirBridge/
 │   ├── test_audio_timing.py
 │   ├── test_connection_manager.py
 │   ├── test_multi_peer_signaling.py
-│   ├── test_security.py     # 15 authentication & security tests
+│   ├── test_security.py     # 19 authentication & security tests
 │   └── test_webrtc_pipeline.py
 ├── requirements.txt         # Production dependencies
 ├── .gitignore               # Git ignore rules
@@ -297,7 +310,7 @@ python scripts/benchmark_pipeline.py
 
 - [x] **v0.1.0:** Initial working MVP (WASAPI capture, Opus encoding, WebRTC, Safari support).
 - [x] **v0.2.0:** **Audio Pipeline & Connection Core** (Multi-peer fanout, monotonic PTS, bounded buffers, decoupled capture, sustained stability validation, 28/28 test suite, GitHub Actions CI, empirical benchmarks).
-- [x] **v0.3.0:** **Security Layer** (Pairing PIN verification, cryptographic session tokens, IP rate limiting & brute-force lockout, Origin/Host validation, 43 automated tests).
+- [x] **v0.3.0:** **Security Layer** (Pairing PIN verification, cryptographic session tokens with IP binding, in-band WebSocket auth, rate limiting, Origin/Host validation, 47 automated tests).
 - [ ] **v0.4.0:** **QR Code Pairing** — scan directly from PC screen to open on iPhone and auto-authenticate without typing IP or PIN.
 - [ ] **v0.5.0:** **Windows System Tray App & Standalone `.exe`** — zero-python executable running in the system tray with auto-start.
 - [ ] **v0.6.0:** **Adaptive Bitrate & Diagnostics Dashboard** — dynamic bitrate adjustment based on live jitter & packet loss.
