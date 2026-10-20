@@ -1,9 +1,9 @@
 # AirBridge 📻
 
-> **Stream your Windows PC audio to iPhone and AirPods over Wi-Fi — no iOS app or cable required.**  
+> **Stream Windows PC audio to your iPhone or AirPods over Wi-Fi — no iOS app required.**  
 > *Open the receiver in Safari, connect, and listen.*
 
-[![Python](https://img.shields.io/badge/Python-3.10%20%7C%203.12%20%7C%203.14-blue.svg)](https://www.python.org/)
+[![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-blue.svg)](https://www.microsoft.com/windows) [![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
 [![WebRTC](https://img.shields.io/badge/WebRTC-aiortc-brightgreen.svg)](https://github.com/aiortc/aiortc)
 [![Codec](https://img.shields.io/badge/Codec-Opus%2048kHz%20Stereo-purple.svg)](https://opus-codec.org/)
 [![FastAPI](https://img.shields.io/badge/Signaling-FastAPI%20%2F%20WebSocket-009688.svg)](https://fastapi.tiangolo.com/)
@@ -14,7 +14,7 @@
 
 ## 🎬 Demo
 
-> A short screen recording showing Windows audio playing through an iPhone/AirPods will be added here. Until then, the working flow has been verified manually on the maintainer’s devices.
+A short screen recording or GIF showing the Windows-to-iPhone audio flow is planned. For now, the project status below reflects manual tests on the maintainer’s own devices.
 
 ## ⚡ What is AirBridge?
 
