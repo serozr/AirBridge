@@ -1,0 +1,783 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AirBridge - WebRTC Audio Receiver</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #090d16;
+      --card-bg: rgba(18, 25, 43, 0.85);
+      --card-border: rgba(255, 255, 255, 0.1);
+      --primary: #3b82f6;
+      --primary-hover: #2563eb;
+      --success: #10b981;
+      --warning: #f59e0b;
+      --danger: #ef4444;
+      --text: #f3f4f6;
+      --text-muted: #9ca3af;
+      --glow: rgba(59, 130, 246, 0.2);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: radial-gradient(circle at 50% 0%, #1e293b 0%, #090d16 75%);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 640px;
+      background: var(--card-bg);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border: 1px solid var(--card-border);
+      border-radius: 20px;
+      padding: 28px;
+      box-shadow: 0 25px 60px rgba(0, 0, 0, 0.6), 0 0 40px var(--glow);
+    }
+
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 20px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--card-border);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .brand-icon {
+      width: 42px;
+      height: 42px;
+      background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 22px;
+      box-shadow: 0 4px 15px rgba(59, 130, 246, 0.4);
+    }
+
+    .brand h1 {
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+    }
+
+    .badge {
+      font-size: 11px;
+      padding: 4px 10px;
+      border-radius: 20px;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid var(--card-border);
+      color: #38bdf8;
+    }
+
+    /* Autoplay banner */
+    .banner {
+      display: none;
+      background: rgba(245, 158, 11, 0.15);
+      border: 1px solid var(--warning);
+      border-radius: 12px;
+      padding: 12px 16px;
+      margin-bottom: 16px;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 13px;
+      color: #fde68a;
+    }
+
+    .banner.active {
+      display: flex;
+    }
+
+    .banner button {
+      background: var(--warning);
+      color: black;
+      border: none;
+      border-radius: 6px;
+      padding: 6px 12px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    /* Status Grid */
+    .status-panel {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin-bottom: 20px;
+    }
+
+    .status-item {
+      background: rgba(0, 0, 0, 0.35);
+      padding: 12px;
+      border-radius: 12px;
+      border: 1px solid var(--card-border);
+      text-align: center;
+    }
+
+    .status-label {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .status-val {
+      font-size: 13px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--text-muted);
+      display: inline-block;
+    }
+
+    .dot.connected {
+      background: var(--success);
+      box-shadow: 0 0 10px var(--success);
+    }
+
+    .dot.connecting {
+      background: var(--warning);
+      animation: pulse 0.8s infinite alternate;
+    }
+
+    .dot.failed {
+      background: var(--danger);
+      box-shadow: 0 0 8px var(--danger);
+    }
+
+    @keyframes pulse {
+      from { opacity: 0.3; }
+      to { opacity: 1; }
+    }
+
+    /* Visualizer */
+    .visualizer-container {
+      background: rgba(0, 0, 0, 0.45);
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      height: 85px;
+      margin-bottom: 20px;
+      overflow: hidden;
+      position: relative;
+    }
+
+    canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    /* Buttons */
+    .controls {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+
+    .btn {
+      flex: 1;
+      padding: 14px 20px;
+      border-radius: 12px;
+      border: none;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, #3b82f6, #2563eb);
+      color: white;
+      box-shadow: 0 4px 18px rgba(59, 130, 246, 0.35);
+    }
+
+    .btn-primary:hover:not(:disabled) {
+      filter: brightness(1.15);
+      transform: translateY(-1px);
+    }
+
+    .btn-primary.active {
+      background: linear-gradient(135deg, #10b981, #059669);
+      box-shadow: 0 4px 18px rgba(16, 185, 129, 0.4);
+    }
+
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--text);
+      border: 1px solid var(--card-border);
+      flex: 0 0 130px;
+    }
+
+    .btn-secondary:hover:not(:disabled) {
+      background: rgba(255, 255, 255, 0.15);
+    }
+
+    .btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+      transform: none !important;
+    }
+
+    /* Stats */
+    .stats-card {
+      background: rgba(0, 0, 0, 0.3);
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      padding: 14px 18px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      color: #94a3b8;
+      margin-bottom: 20px;
+    }
+
+    .stats-row {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 6px;
+    }
+
+    .stats-row:last-child {
+      margin-bottom: 0;
+    }
+
+    .stats-value {
+      color: #38bdf8;
+      font-weight: 600;
+    }
+
+    /* Diagnostics Log Console */
+    .console-card {
+      background: #050811;
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      padding: 12px 14px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+    }
+
+    .console-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      color: var(--text-muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .console-logs {
+      height: 110px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      scroll-behavior: smooth;
+    }
+
+    .log-line {
+      line-height: 1.4;
+      word-break: break-all;
+    }
+
+    .log-info { color: #94a3b8; }
+    .log-success { color: #4ade80; font-weight: 500; }
+    .log-warn { color: #fbbf24; }
+    .log-error { color: #f87171; font-weight: 600; }
+
+    audio {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    <div class="header">
+      <div class="brand">
+        <div class="brand-icon">📻</div>
+        <div>
+          <h1>AirBridge</h1>
+          <p style="font-size: 12px; color: var(--text-muted);">Realtime WebRTC Audio Streaming</p>
+        </div>
+      </div>
+      <span class="badge" id="codecBadge">Opus 48kHz Stereo</span>
+    </div>
+
+    <!-- Autoplay warning banner -->
+    <div class="banner" id="autoplayBanner">
+      <span>🔊 Browser blocked sound playback. Click to enable audio:</span>
+      <button id="enableAudioBtn">Enable Sound</button>
+    </div>
+
+    <!-- Status Grid -->
+    <div class="status-panel">
+      <div class="status-item">
+        <div class="status-label">Signaling (WS)</div>
+        <div class="status-val" id="wsStatus">
+          <span class="dot" id="wsDot"></span>
+          <span id="wsText">Disconnected</span>
+        </div>
+      </div>
+      <div class="status-item">
+        <div class="status-label">WebRTC Peer</div>
+        <div class="status-val" id="pcStatus">
+          <span class="dot" id="pcDot"></span>
+          <span id="pcText">Idle</span>
+        </div>
+      </div>
+      <div class="status-item">
+        <div class="status-label">ICE State</div>
+        <div class="status-val" id="iceStatus">
+          <span class="dot" id="iceDot"></span>
+          <span id="iceText">New</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Audio Visualizer -->
+    <div class="visualizer-container">
+      <canvas id="visualizerCanvas"></canvas>
+    </div>
+
+    <!-- Controls -->
+    <div class="controls">
+      <button class="btn btn-primary" id="connectBtn">▶ Connect & Stream</button>
+      <button class="btn btn-secondary" id="disconnectBtn" disabled>⏹ Stop</button>
+    </div>
+
+    <!-- Hidden Audio Element -->
+    <audio id="remoteAudio" autoplay playsinline></audio>
+
+    <!-- Real-time Stats -->
+    <div class="stats-card">
+      <div class="stats-row">
+        <span>Packets Received:</span>
+        <span class="stats-value" id="statPackets">0</span>
+      </div>
+      <div class="stats-row">
+        <span>Audio Bitrate:</span>
+        <span class="stats-value" id="statBitrate">0 kbps</span>
+      </div>
+      <div class="stats-row">
+        <span>Jitter:</span>
+        <span class="stats-value" id="statJitter">0 ms</span>
+      </div>
+      <div class="stats-row">
+        <span>Round Trip Time (RTT):</span>
+        <span class="stats-value" id="statRtt">0 ms</span>
+      </div>
+    </div>
+
+    <!-- Diagnostics Log -->
+    <div class="console-card">
+      <div class="console-header">
+        <span>Live Diagnostics Log</span>
+        <button id="clearLogsBtn" style="background:none; border:none; color:#64748b; font-size:10px; cursor:pointer;">Clear</button>
+      </div>
+      <div class="console-logs" id="logContainer"></div>
+    </div>
+  </div>
+
+  <script>
+    const connectBtn = document.getElementById('connectBtn');
+    const disconnectBtn = document.getElementById('disconnectBtn');
+    const remoteAudio = document.getElementById('remoteAudio');
+    const autoplayBanner = document.getElementById('autoplayBanner');
+    const enableAudioBtn = document.getElementById('enableAudioBtn');
+    const logContainer = document.getElementById('logContainer');
+    const clearLogsBtn = document.getElementById('clearLogsBtn');
+
+    const wsDot = document.getElementById('wsDot');
+    const wsText = document.getElementById('wsText');
+    const pcDot = document.getElementById('pcDot');
+    const pcText = document.getElementById('pcText');
+    const iceDot = document.getElementById('iceDot');
+    const iceText = document.getElementById('iceText');
+
+    const statPackets = document.getElementById('statPackets');
+    const statBitrate = document.getElementById('statBitrate');
+    const statJitter = document.getElementById('statJitter');
+    const statRtt = document.getElementById('statRtt');
+
+    const canvas = document.getElementById('visualizerCanvas');
+    const canvasCtx = canvas.getContext('2d');
+
+    let ws = null;
+    let pc = null;
+    let statsInterval = null;
+    let lastBytesReceived = 0;
+    let lastTimestamp = 0;
+
+    let audioCtx = null;
+    let analyser = null;
+    let animFrame = null;
+
+    // Logging helpers
+    function log(text, type = 'info') {
+      const line = document.createElement('div');
+      line.className = `log-line log-${type}`;
+      const now = new Date().toTimeString().split(' ')[0];
+      line.textContent = `[${now}] ${text}`;
+      logContainer.appendChild(line);
+      logContainer.scrollTop = logContainer.scrollHeight;
+      console.log(`[AirBridge] ${text}`);
+    }
+
+    window.onerror = function (msg, url, line) {
+      log(`JS Error: ${msg} (Line ${line})`, 'error');
+    };
+    window.onunhandledrejection = function (e) {
+      log(`Unhandled Promise Rejection: ${e.reason}`, 'error');
+    };
+
+    clearLogsBtn.addEventListener('click', () => { logContainer.innerHTML = ''; });
+
+    function setStatus(dot, textEl, state, label) {
+      dot.className = 'dot ' + state;
+      textEl.textContent = label;
+    }
+
+    function resizeCanvas() {
+      canvas.width = canvas.parentElement.clientWidth;
+      canvas.height = canvas.parentElement.clientHeight;
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    // Canvas Visualizer
+    function setupVisualizer(stream) {
+      try {
+        if (!audioCtx) {
+          audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+        if (audioCtx.state === 'suspended') {
+          audioCtx.resume();
+        }
+
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 256;
+        const source = audioCtx.createMediaStreamSource(stream);
+        source.connect(analyser);
+
+        const bufferLength = analyser.frequencyBinCount;
+        const dataArray = new Uint8Array(bufferLength);
+
+        function draw() {
+          animFrame = requestAnimationFrame(draw);
+          analyser.getByteFrequencyData(dataArray);
+
+          canvasCtx.fillStyle = '#070b14';
+          canvasCtx.fillRect(0, 0, canvas.width, canvas.height);
+
+          const barWidth = (canvas.width / bufferLength) * 2;
+          let barHeight;
+          let x = 0;
+
+          for (let i = 0; i < bufferLength; i++) {
+            barHeight = (dataArray[i] / 255) * canvas.height;
+            const gradient = canvasCtx.createLinearGradient(0, canvas.height, 0, 0);
+            gradient.addColorStop(0, '#3b82f6');
+            gradient.addColorStop(1, '#a855f7');
+            canvasCtx.fillStyle = gradient;
+            canvasCtx.fillRect(x, canvas.height - barHeight, barWidth - 1, barHeight);
+            x += barWidth;
+          }
+        }
+        draw();
+        log('Audio visualizer attached and rendering.', 'info');
+      } catch (err) {
+        log(`Visualizer warning: ${err.message}`, 'warn');
+      }
+    }
+
+    // Connect & Start Stream
+    async function startConnection() {
+      log('User initiated connection sequence...', 'info');
+
+      // Update UI button state immediately
+      connectBtn.disabled = true;
+      connectBtn.textContent = '⏳ Connecting...';
+      connectBtn.className = 'btn btn-primary';
+      disconnectBtn.disabled = false;
+      autoplayBanner.classList.remove('active');
+
+      // Crucial: Unlock AudioContext within direct user click gesture
+      try {
+        if (!audioCtx) {
+          audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
+        }
+        if (audioCtx.state === 'suspended') {
+          await audioCtx.resume();
+        }
+        log(`AudioContext unlocked (state: ${audioCtx.state})`, 'info');
+      } catch (e) {
+        log(`AudioContext note: ${e.message}`, 'warn');
+      }
+
+      setStatus(wsDot, wsText, 'connecting', 'Connecting...');
+      setStatus(pcDot, pcText, 'connecting', 'Preparing');
+
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${protocol}//${window.location.host}/ws`;
+      log(`Opening WebSocket signaling: ${wsUrl}`, 'info');
+
+      try {
+        ws = new WebSocket(wsUrl);
+      } catch (err) {
+        log(`Failed to create WebSocket: ${err.message}`, 'error');
+        handleFailure('WebSocket failed');
+        return;
+      }
+
+      ws.onopen = async () => {
+        log('WebSocket signaling connected successfully!', 'success');
+        setStatus(wsDot, wsText, 'connected', 'Connected');
+        try {
+          await createPeerConnection();
+        } catch (pcErr) {
+          log(`PeerConnection initialization error: ${pcErr.message}`, 'error');
+          handleFailure('WebRTC failed');
+        }
+      };
+
+      ws.onclose = (event) => {
+        log(`WebSocket closed (code: ${event.code}, reason: ${event.reason || 'normal'})`, 'warn');
+        setStatus(wsDot, wsText, 'failed', 'Closed');
+        cleanup();
+      };
+
+      ws.onerror = (err) => {
+        log('WebSocket error occurred.', 'error');
+        setStatus(wsDot, wsText, 'failed', 'Error');
+        handleFailure('WebSocket error');
+      };
+
+      ws.onmessage = async (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'answer') {
+            log('Received SDP Answer from server.', 'info');
+            await pc.setRemoteDescription(new RTCSessionDescription(msg));
+            log('Remote description (SDP Answer) applied.', 'success');
+          } else if (msg.type === 'candidate' && msg.candidate) {
+            try {
+              await pc.addIceCandidate(new RTCIceCandidate(msg.candidate));
+              log('Added remote ICE candidate.', 'info');
+            } catch (iceErr) {
+              log(`Error adding ICE candidate: ${iceErr.message}`, 'warn');
+            }
+          }
+        } catch (msgErr) {
+          log(`Error parsing server message: ${msgErr.message}`, 'error');
+        }
+      };
+    }
+
+    async function createPeerConnection() {
+      log('Creating RTCPeerConnection...', 'info');
+
+      // Use STUN for NAT discovery, direct host works for localhost/LAN
+      pc = new RTCPeerConnection({
+        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+      });
+
+      pc.onconnectionstatechange = () => {
+        const state = pc.connectionState;
+        log(`PeerConnection state changed: ${state}`, state === 'connected' ? 'success' : 'info');
+        if (state === 'connected') {
+          setStatus(pcDot, pcText, 'connected', 'Active');
+          connectBtn.textContent = '🔊 Streaming Live';
+          connectBtn.className = 'btn btn-primary active';
+        } else if (state === 'connecting') {
+          setStatus(pcDot, pcText, 'connecting', 'Connecting');
+        } else if (state === 'failed' || state === 'disconnected') {
+          setStatus(pcDot, pcText, 'failed', state);
+          handleFailure(`WebRTC ${state}`);
+        }
+      };
+
+      pc.oniceconnectionstatechange = () => {
+        const state = pc.iceConnectionState;
+        log(`ICE connection state: ${state}`, (state === 'connected' || state === 'completed') ? 'success' : 'info');
+        if (state === 'connected' || state === 'completed') {
+          setStatus(iceDot, iceText, 'connected', state);
+        } else if (state === 'checking') {
+          setStatus(iceDot, iceText, 'connecting', 'Checking');
+        } else if (state === 'failed' || state === 'disconnected') {
+          setStatus(iceDot, iceText, 'failed', state);
+        }
+      };
+
+      pc.onicecandidate = (event) => {
+        if (event.candidate && ws && ws.readyState === WebSocket.OPEN) {
+          log(`Generated local ICE candidate: ${event.candidate.type || 'host'}`, 'info');
+          ws.send(JSON.stringify({
+            type: 'candidate',
+            candidate: {
+              candidate: event.candidate.candidate,
+              sdpMid: event.candidate.sdpMid,
+              sdpMLineIndex: event.candidate.sdpMLineIndex
+            }
+          }));
+        }
+      };
+
+      pc.ontrack = async (event) => {
+        log(`Audio track received from server! (Kind: ${event.track.kind}, id: ${event.track.id})`, 'success');
+        const stream = (event.streams && event.streams[0]) ? event.streams[0] : new MediaStream([event.track]);
+        remoteAudio.srcObject = stream;
+
+        try {
+          await remoteAudio.play();
+          log('HTMLAudioElement playing live audio stream!', 'success');
+        } catch (playErr) {
+          log(`Autoplay blocked: ${playErr.message}`, 'warn');
+          autoplayBanner.classList.add('active');
+        }
+
+        setupVisualizer(stream);
+      };
+
+      // Request audio-only reception
+      log('Adding audio transceiver (recvonly)...', 'info');
+      pc.addTransceiver('audio', { direction: 'recvonly' });
+
+      // Create Offer
+      log('Creating SDP Offer...', 'info');
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+
+      log('Sending SDP Offer to server via WebSocket...', 'info');
+      ws.send(JSON.stringify({
+        type: 'offer',
+        sdp: pc.localDescription.sdp
+      }));
+
+      startStatsMonitoring();
+    }
+
+    function startStatsMonitoring() {
+      if (statsInterval) clearInterval(statsInterval);
+      statsInterval = setInterval(async () => {
+        if (!pc) return;
+        try {
+          const stats = await pc.getStats();
+          stats.forEach(report => {
+            if (report.type === 'inbound-rtp' && report.kind === 'audio') {
+              statPackets.textContent = (report.packetsReceived || 0).toLocaleString();
+              if (report.jitter !== undefined) {
+                statJitter.textContent = (report.jitter * 1000).toFixed(1) + ' ms';
+              }
+
+              if (lastTimestamp && lastBytesReceived && report.bytesReceived) {
+                const duration = (report.timestamp - lastTimestamp) / 1000;
+                const bytes = report.bytesReceived - lastBytesReceived;
+                if (duration > 0 && bytes >= 0) {
+                  const bitrate = (bytes * 8) / duration / 1000;
+                  statBitrate.textContent = bitrate.toFixed(1) + ' kbps';
+                }
+              }
+              lastBytesReceived = report.bytesReceived || 0;
+              lastTimestamp = report.timestamp;
+            }
+
+            if (report.type === 'candidate-pair' && report.currentRoundTripTime !== undefined) {
+              statRtt.textContent = (report.currentRoundTripTime * 1000).toFixed(1) + ' ms';
+            }
+          });
+        } catch (e) {}
+      }, 1000);
+    }
+
+    function handleFailure(msg) {
+      connectBtn.textContent = `⚠️ ${msg} (Retry)`;
+      connectBtn.className = 'btn btn-primary';
+      connectBtn.disabled = false;
+    }
+
+    function cleanup() {
+      log('Cleaning up connection resources...', 'info');
+      if (statsInterval) clearInterval(statsInterval);
+      if (animFrame) cancelAnimationFrame(animFrame);
+      if (pc) {
+        pc.close();
+        pc = null;
+      }
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.close();
+        ws = null;
+      }
+
+      connectBtn.disabled = false;
+      connectBtn.textContent = '▶ Connect & Stream';
+      connectBtn.className = 'btn btn-primary';
+      disconnectBtn.disabled = true;
+
+      setStatus(pcDot, pcText, '', 'Idle');
+      setStatus(iceDot, iceText, '', 'New');
+    }
+
+    enableAudioBtn.addEventListener('click', async () => {
+      try {
+        if (audioCtx && audioCtx.state === 'suspended') {
+          await audioCtx.resume();
+        }
+        await remoteAudio.play();
+        autoplayBanner.classList.remove('active');
+        log('Audio manually enabled by user.', 'success');
+      } catch (err) {
+        log(`Failed to enable audio: ${err.message}`, 'error');
+      }
+    });
+
+    connectBtn.addEventListener('click', startConnection);
+    disconnectBtn.addEventListener('click', cleanup);
+
+    // Initial greeting in log
+    log('AirBridge Receiver ready. Click "Connect & Stream" to begin.', 'info');
+  </script>
+</body>
+</html>

@@ -5,3 +5,5 @@ uvicorn[standard]
 websockets
 opuslib
 pyogg
+aiortc
+av
