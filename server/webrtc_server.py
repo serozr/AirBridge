@@ -191,13 +191,65 @@ async def get_index():
     return FileResponse(INDEX_HTML)
 
 
+def get_lan_info() -> dict:
+    """Detects primary LAN IPv4 address and generates recommended URLs."""
+    import socket
+    import ifaddr
+
+    primary_ip = None
+    all_ips = []
+
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(0.2)
+        s.connect(("8.8.8.8", 80))
+        cand = s.getsockname()[0]
+        s.close()
+        if cand and not cand.startswith(("127.", "169.254.")):
+            primary_ip = cand
+            all_ips.append(cand)
+    except Exception:
+        pass
+
+    try:
+        for adapter in ifaddr.get_adapters():
+            for ip in adapter.ips:
+                if ip.is_IPv4 and not ip.ip.startswith(("127.", "169.254.")):
+                    if ip.ip not in all_ips:
+                        all_ips.append(ip.ip)
+    except Exception:
+        pass
+
+    if not primary_ip and all_ips:
+        primary_ip = all_ips[0]
+
+    port = 8000
+    lan_url = f"http://{primary_ip}:{port}" if primary_ip else f"http://localhost:{port}"
+
+    return {
+        "primary_ip": primary_ip or "127.0.0.1",
+        "lan_url": lan_url,
+        "all_ips": all_ips,
+        "port": port,
+    }
+
+
+@app.get("/api/info")
+async def get_network_info():
+    """Returns detected LAN addresses and recommended iPhone connection URL."""
+    return get_lan_info()
+
+
 @app.get("/health")
 async def health_check():
     """Service health endpoint."""
+    info = get_lan_info()
     return {
         "status": "ok",
         "service": "airbridge",
         "active_peers": len(active_peer_connections),
+        "lan_ip": info["primary_ip"],
+        "lan_url": info["lan_url"],
     }
 
 
@@ -276,9 +328,22 @@ async def websocket_signaling(websocket: WebSocket):
 
 
 if __name__ == "__main__":
+    info = get_lan_info()
+    print("=" * 66)
+    print("  AIRBRIDGE - Phase 4: Local Network & iPhone Streaming Server")
+    print("=" * 66)
+    print(f"  Local PC URL:      http://localhost:{info['port']}")
+    print(f"  Recommended LAN:   {info['lan_url']}")
+    print(f"  Detected IPs:      {', '.join(info['all_ips'])}")
+    print("-" * 66)
+    print(f"  >> On your iPhone (Safari connected to the same Wi-Fi):")
+    print(f"     Open: {info['lan_url']}")
+    print("=" * 66)
+    print()
+
     uvicorn.run(
         app,
         host="0.0.0.0",
-        port=8000,
+        port=info["port"],
         log_level="info",
     )

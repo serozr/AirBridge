@@ -125,6 +125,62 @@
       cursor: pointer;
     }
 
+    /* LAN / iPhone URL Card */
+    .network-card {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      background: rgba(59, 130, 246, 0.1);
+      border: 1px solid rgba(59, 130, 246, 0.3);
+      border-radius: 12px;
+      padding: 12px 16px;
+      margin-bottom: 20px;
+    }
+
+    .network-icon {
+      font-size: 24px;
+    }
+
+    .network-info {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .network-title {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: #93c5fd;
+      margin-bottom: 3px;
+    }
+
+    .network-url {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 14px;
+      font-weight: 600;
+      color: #ffffff;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .copy-btn {
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid var(--card-border);
+      color: var(--text);
+      padding: 7px 14px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      white-space: nowrap;
+    }
+
+    .copy-btn:hover {
+      background: rgba(255, 255, 255, 0.2);
+    }
+
     /* Status Grid */
     .status-panel {
       display: grid;
@@ -350,6 +406,16 @@
     <div class="banner" id="autoplayBanner">
       <span>🔊 Browser blocked sound playback. Click to enable audio:</span>
       <button id="enableAudioBtn">Enable Sound</button>
+    </div>
+
+    <!-- LAN / iPhone URL Card -->
+    <div class="network-card" id="networkCard">
+      <div class="network-icon">📱</div>
+      <div class="network-info">
+        <div class="network-title">iPhone Safari Connection URL</div>
+        <div class="network-url" id="networkUrl">Loading...</div>
+      </div>
+      <button class="copy-btn" id="copyUrlBtn" title="Copy URL">📋 Copy</button>
     </div>
 
     <!-- Status Grid -->
@@ -778,6 +844,34 @@
 
     // Initial greeting in log
     log('AirBridge Receiver ready. Click "Connect & Stream" to begin.', 'info');
+
+    // Fetch LAN info for display
+    const networkUrlEl = document.getElementById('networkUrl');
+    const copyUrlBtn = document.getElementById('copyUrlBtn');
+
+    async function loadNetworkInfo() {
+      try {
+        const res = await fetch('/api/info');
+        if (res.ok) {
+          const data = await res.json();
+          networkUrlEl.textContent = data.lan_url;
+          log(`Detected LAN IP: ${data.primary_ip} (iPhone URL: ${data.lan_url})`, 'info');
+        }
+      } catch (e) {
+        networkUrlEl.textContent = `http://${window.location.host}`;
+      }
+    }
+    loadNetworkInfo();
+
+    copyUrlBtn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(networkUrlEl.textContent);
+        copyUrlBtn.textContent = '✅ Copied!';
+        setTimeout(() => { copyUrlBtn.textContent = '📋 Copy'; }, 2000);
+      } catch (err) {
+        prompt('Copy this URL to open on your iPhone:', networkUrlEl.textContent);
+      }
+    });
   </script>
 </body>
 </html>
