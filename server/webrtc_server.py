@@ -149,9 +149,11 @@ def get_lan_info() -> Dict[str, Any]:
 # -----------------------------------------------------------------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    loop = asyncio.get_running_loop()
+    connection_manager.set_loop(loop)
     logger.info("AirBridge WebRTC Server starting up...")
     cleanup_task = asyncio.create_task(
-        connection_manager.start_cleanup_loop(interval_seconds=15.0, max_idle_seconds=300.0)
+        connection_manager.start_cleanup_loop(interval_seconds=15.0, max_idle_seconds=120.0)
     )
     yield
     logger.info("Server shutting down, closing all connections...")
@@ -281,6 +283,7 @@ async def websocket_signaling(websocket: WebSocket):
                         logger.warning("Failed to parse ICE candidate from %s: %s", cid, e)
 
             elif msg_type == "ping":
+                session.touch()
                 await websocket.send_json({"type": "pong"})
 
     except WebSocketDisconnect:

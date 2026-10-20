@@ -7,7 +7,7 @@
 [![Python](https://img.shields.io/badge/Python-3.10%20%7C%203.12%20%7C%203.14-blue.svg)](https://www.python.org/)
 [![WebRTC](https://img.shields.io/badge/WebRTC-aiortc-brightgreen.svg)](https://github.com/aiortc/aiortc)
 [![Signaling](https://img.shields.io/badge/Signaling-FastAPI%20%2F%20WebSocket-009688.svg)](https://fastapi.tiangolo.com/)
-[![Tests](https://img.shields.io/badge/Tests-24%20passed-success.svg)]()
+[![Tests](https://img.shields.io/badge/Tests-27%20passed-success.svg)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ---
@@ -146,12 +146,15 @@ tests/test_connection_manager.py::test_duplicate_client_id_rejected PASSED
 tests/test_connection_manager.py::test_concurrent_client_removal PASSED
 tests/test_connection_manager.py::test_rapid_connect_disconnect_race_condition PASSED
 tests/test_connection_manager.py::test_silent_active_webrtc_client_not_pruned_as_stale PASSED
-tests/test_connection_manager.py::test_capture_error_reporting_and_health_exposure PASSED
-tests/test_connection_manager.py::test_bounded_capture_recovery PASSED
+tests/test_connection_manager.py::test_capture_error_from_background_thread_dispatches_safely PASSED
+tests/test_connection_manager.py::test_flapping_capture_does_not_reset_retries PASSED
+tests/test_connection_manager.py::test_stop_timeout_reports_error_health PASSED
+tests/test_connection_manager.py::test_recovery_cancelled_when_last_client_leaves PASSED
+tests/test_connection_manager.py::test_heartbeat_updates_last_seen PASSED
 tests/test_multi_peer_signaling.py::test_two_simultaneous_webrtc_peers_receive_audio PASSED
 tests/test_webrtc_pipeline.py::test_pipeline_to_webrtc_track_integration PASSED
 tests/test_webrtc_pipeline.py::test_webrtc_track_consecutive_underruns_and_recovery PASSED
-============================= 24 passed in 4.91s ==============================
+============================= 27 passed in 4.24s ==============================
 ```
 
 ---
