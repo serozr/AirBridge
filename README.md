@@ -1,22 +1,29 @@
 # AirBridge 📻
 
-> **Ultra-low latency Windows system audio streaming to iPhone & AirPods over local Wi-Fi.**  
-> *No native iOS app required. Pure WebRTC in Safari.*
+> **Stream Windows PC audio to your iPhone or AirPods over Wi-Fi — no iOS app required.**  
+> Open the receiver in Safari, connect, and listen.
 
-[![Python](https://img.shields.io/badge/Python-3.10%20%7C%203.12%20%7C%203.14-blue.svg)](https://www.python.org/)
+[![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-blue.svg)](https://www.microsoft.com/windows)
+[![Python](https://img.shields.io/badge/Python-3.12%20recommended-blue.svg)](https://www.python.org/)
 [![WebRTC](https://img.shields.io/badge/WebRTC-aiortc-brightgreen.svg)](https://github.com/aiortc/aiortc)
+<<<<<<< HEAD
 [![Codec](https://img.shields.io/badge/Codec-Opus%2048kHz%20Stereo-purple.svg)](https://opus-codec.org/)
 [![FastAPI](https://img.shields.io/badge/Signaling-FastAPI%20%2F%20WebSocket-009688.svg)](https://fastapi.tiangolo.com/)
 [![Tests](https://img.shields.io/badge/Tests-10%20passed-success.svg)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Release](https://img.shields.io/badge/Release-v0.2.0-blue.svg)]()
+=======
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Open source](https://img.shields.io/badge/open%20source-MIT-blue.svg)](LICENSE)
+>>>>>>> 241025012b3fbeb72a28ca04a019250496e754cb
 
----
+## What is AirBridge?
 
-## ⚡ What is AirBridge?
+AirBridge captures Windows system output through WASAPI loopback and sends live audio to Safari on an iPhone over the same local Wi-Fi network using WebRTC. No native iOS app is required.
 
-**AirBridge** turns your iPhone and AirPods into wireless headphones for your Windows PC without purchasing Bluetooth dongles, proprietary receivers, or installing native apps on your phone.
+The maintainer has manually verified live audio on a Windows PC, in a desktop browser, and on an iPhone Safari receiver over local Wi-Fi. End-to-end latency has **not** been benchmarked yet.
 
+<<<<<<< HEAD
 Using Windows **WASAPI Loopback**, a central **Audio Pipeline** with monotonic sample-based PTS, and standard **WebRTC audio tracks**, AirBridge captures everything playing on your Windows PC (YouTube, Spotify, games, meetings) and streams it with **sub-50ms latency** directly to Safari on iOS.
 
 ```text
@@ -42,12 +49,32 @@ Using Windows **WASAPI Loopback**, a central **Audio Pipeline** with monotonic s
  │ Desktop Chrome  │       │  iPhone Safari  │    │ Other Devices │
  │ 🔊 Local Audio  │       │  🎧 AirPods     │    │               │
  └─────────────────┘       └─────────────────┘    └───────────────┘
+=======
+## How it works
+
+```text
+Windows system audio
+       ↓
+WASAPI loopback (SoundCard)
+       ↓
+48 kHz stereo PCM frames
+       ↓
+aiortc / PyAV WebRTC audio track
+       ↓
+WebRTC over local Wi-Fi
+       ↓
+iPhone Safari → AirPods / speaker
+>>>>>>> 241025012b3fbeb72a28ca04a019250496e754cb
 ```
 
----
+## Features
 
-## ✨ Features
+- No native iOS app; use Safari.
+- Captures Windows default output audio.
+- WebRTC audio transport with a bounded queue that drops older frames to limit backlog.
+- Browser diagnostics, audio visualizer, packet, bitrate, jitter and RTT displays.
 
+<<<<<<< HEAD
 - **Zero iOS Apps:** Connect straight from Mobile Safari. No TestFlight, App Store downloads, or sideloading needed.
 - **Ultra-Low Latency:** Typically **20 ms – 40 ms** on standard home Wi-Fi networks (imperceptible delay for videos and casual games).
 - **Multi-Peer Architecture:** ONE capture engine feeds multiple simultaneous listeners without duplicating WASAPI loops or CPU overhead.
@@ -55,9 +82,15 @@ Using Windows **WASAPI Loopback**, a central **Audio Pipeline** with monotonic s
 - **Monotonic Sample-Based PTS:** Audio Presentation Time Stamps advance by exactly 960 samples per frame, eliminating clock jitter and timestamp drift.
 - **Connection Lifecycle Management:** Auto-starts capture when the first client arrives; pauses capture when all clients disconnect to save CPU.
 - **In-Browser Diagnostics & Visualizer:** Real-time frequency visualizer, packet counts, bitrate, and jitter statistics.
+=======
+## Requirements
+>>>>>>> 241025012b3fbeb72a28ca04a019250496e754cb
 
----
+- Windows 10 or 11, 64-bit.
+- Python 3.12 recommended; other versions should be treated as unverified until tested.
+- PC and iPhone connected to the same trusted Wi-Fi network.
 
+<<<<<<< HEAD
 ## 🚀 Quick Start
 
 ### 1. Prerequisites
@@ -69,24 +102,23 @@ Using Windows **WASAPI Loopback**, a central **Audio Pipeline** with monotonic s
 ### 2. Installation
 
 Clone the repository and set up a virtual environment:
+=======
+## Quick start
+>>>>>>> 241025012b3fbeb72a28ca04a019250496e754cb
 
 ```powershell
 git clone https://github.com/serozr/AirBridge.git
 cd AirBridge
-
 python -m venv .venv
-.\.venv\Scripts\activate
-pip install -r requirements.txt
-```
-
-### 3. Run the Server
-
-```powershell
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
 python -u server/webrtc_server.py
 ```
 
-Upon launching, AirBridge prints the active local network address:
+Open the LAN URL printed in the terminal using Safari on your iPhone, then tap **Connect & Stream**. Play audio on the PC.
 
+<<<<<<< HEAD
 ```text
 ==================================================================
   AirBridge v0.2.0 - Audio Pipeline & Connection Core
@@ -145,18 +177,31 @@ tests/test_webrtc_pipeline.py::test_pipeline_to_webrtc_track_integration PASSED
 When connecting from another device on the local network (such as your iPhone), Windows Firewall may require allowing incoming traffic on TCP port 8000.
 
 If Safari cannot load the page, open **PowerShell as Administrator** and run:
+=======
+If PowerShell blocks virtual-environment activation, use the virtual environment interpreter directly:
+>>>>>>> 241025012b3fbeb72a28ca04a019250496e754cb
 
 ```powershell
-New-NetFirewallRule -DisplayName "AirBridge WebRTC (TCP 8000)" -Direction Inbound -LocalPort 8000 -Protocol TCP -Action Allow
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -u server/webrtc_server.py
 ```
 
----
+## Network and firewall notes
 
-## 📁 Repository Structure
+Use AirBridge only on a trusted local network. The HTTP receiver page and WebSocket signaling do not currently provide application-level authentication. **Do not expose port 8000 to the public internet.**
+
+If your iPhone cannot open the receiver page, confirm both devices are on the same non-guest Wi-Fi network. If necessary, run PowerShell as Administrator:
+
+```powershell
+New-NetFirewallRule -DisplayName "AirBridge WebRTC (TCP 8000)" -Direction Inbound -LocalPort 8000 -Protocol TCP -Action Allow -Profile Private
+```
+
+## Repository structure
 
 ```text
 AirBridge/
 ├── server/
+<<<<<<< HEAD
 │   ├── config.py            # Global audio, network & buffer configuration
 │   ├── models.py            # AudioFrameData & PipelineMetrics models
 │   ├── audio_capture.py     # Windows WASAPI loopback capture (SoundCard)
@@ -174,12 +219,29 @@ AirBridge/
 ├── requirements.txt         # Production dependencies
 ├── .gitignore               # Git ignore rules
 └── README.md                # Documentation & Architecture
+=======
+│   ├── audio_capture.py
+│   ├── opus_encoder.py
+│   └── webrtc_server.py
+├── web/
+│   └── index.html
+├── requirements.txt
+├── LICENSE
+└── README.md
+>>>>>>> 241025012b3fbeb72a28ca04a019250496e754cb
 ```
 
----
+## Validation status
 
-## 🛠️ Architecture & Pipeline Details
+- [x] Windows loopback capture produces live PCM frames.
+- [x] Standalone Opus encoder test produces real Opus packets.
+- [x] Live WebRTC audio plays in a desktop browser.
+- [x] Live Windows audio is heard on iPhone Safari over the same Wi-Fi network.
+- [ ] Automated tests and repeatable end-to-end latency benchmarks.
+- [ ] Compatibility matrix across Windows, Python and iOS versions.
+- [ ] Demo GIF/video.
 
+<<<<<<< HEAD
 | Stage | Module | Responsibility |
 |---|---|---|
 | **Capture** | `server/audio_capture.py` | WASAPI loopback via SoundCard, reads 20 ms blocks @ 48 kHz stereo s16 |
@@ -190,19 +252,33 @@ AirBridge/
 | **Transport** | WebRTC (SRTP / UDP) | Direct peer-to-peer RTP transmission with sub-frame packaging |
 | **Signaling** | FastAPI + WebSockets | Low-overhead JSON SDP Offer/Answer and ICE candidate exchange |
 | **Playback** | HTML5 Audio + Web Audio | Low-latency audio rendering with user-gesture unlock handling |
+=======
+These are manual maintainer tests, not CI-certified compatibility guarantees.
+>>>>>>> 241025012b3fbeb72a28ca04a019250496e754cb
 
----
+## Important implementation note
 
-## 🗺️ Roadmap
+The standalone `server/opus_encoder.py` demonstrates raw libopus encoding. The primary streaming server uses aiortc/PyAV audio frames and WebRTC's negotiated audio codec path; the standalone encoder is not directly connected to the main server.
 
+<<<<<<< HEAD
 - [x] **v0.1.0:** Initial working MVP (WASAPI capture, Opus encoding, WebRTC, Safari support).
 - [x] **v0.2.0 (Current):** **Audio Pipeline & Connection Core** (Multi-peer fanout, monotonic PTS, bounded buffers, decoupled capture, unit & integration test suite).
 - [ ] **v0.3.0:** **QR Code Pairing** — scan directly from PC screen to open on iPhone without typing IP addresses.
 - [ ] **v0.4.0:** **Windows System Tray App & Standalone `.exe`** — zero-python executable running in the system tray with auto-start.
 - [ ] **v0.5.0:** **Adaptive Bitrate & Diagnostics Dashboard** — dynamic bitrate adjustment based on live jitter & packet loss.
+=======
+## Roadmap
+>>>>>>> 241025012b3fbeb72a28ca04a019250496e754cb
 
----
+- [ ] QR-code pairing to open the correct LAN URL without typing an IP address.
+- [ ] Automated tests and repeatable latency benchmarking.
+- [ ] Windows tray app and packaged executable.
+- [ ] Adaptive bitrate and further audio tuning based on measurements.
 
-## 📄 License
+## Issues and feedback
 
-This project is open-source under the [MIT License](LICENSE).
+Bug reports and setup feedback are welcome via [GitHub Issues](https://github.com/serozr/AirBridge/issues). Include your Windows/Python/iOS versions and relevant sanitized diagnostics. Do not attach private audio recordings or sensitive network details.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
