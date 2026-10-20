@@ -8,7 +8,7 @@
 [![Codec](https://img.shields.io/badge/Codec-Opus%2048kHz%20Stereo-purple.svg)](https://opus-codec.org/)
 [![FastAPI](https://img.shields.io/badge/Signaling-FastAPI%20%2F%20WebSocket-009688.svg)](https://fastapi.tiangolo.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/status-working%20MVP-orange.svg)](https://github.com/serozr/AirBridge/releases)
+[![Version](https://img.shields.io/badge/status-working%20MVP-orange.svg)](https://github.com/serozr/AirBridge/releases/tag/v0.1.0)
 
 ---
 
