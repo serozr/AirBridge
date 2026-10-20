@@ -210,8 +210,9 @@ async def test_capture_error_from_background_thread_dispatches_safely():
 @pytest.mark.asyncio
 async def test_flapping_capture_does_not_reset_retries():
     """
-    Verify that a flapping capture crash (starts, but crashes before producing stable frames)
-    does NOT reset retry count and terminates at MAX_CAPTURE_RETRIES.
+    Verify that a flapping capture crash (starts, produces small bursts of frames, but crashes
+    before meeting sustained stability criteria) does NOT reset retry count and terminates
+    at MAX_CAPTURE_RETRIES.
     """
     pipeline = AudioPipeline()
     dummy_capture = DummyCapture(on_frame=pipeline.publish_pcm)
@@ -219,14 +220,62 @@ async def test_flapping_capture_does_not_reset_retries():
 
     session = await mgr.register_client("127.0.0.1:7000", client_id="flapping-client")
 
-    # Simulate 4 consecutive crashes without 5 stable frames
+    # Simulate consecutive crashes with small bursts of 10 frames each attempt
     for i in range(1, mgr.MAX_CAPTURE_RETRIES + 2):
         mgr._handle_capture_error(RuntimeError(f"Flapping crash {i}"))
         await mgr._attempt_capture_recovery()
+        # Simulate short burst of 10 frames
+        for _ in range(10):
+            mgr._notify_frame_produced()
 
     assert mgr._capture_retry_count == mgr.MAX_CAPTURE_RETRIES
     health = mgr.get_capture_health()
     assert health["status"] == "error"
+    assert "Capture failed permanently" in health["error"]
+
+    await mgr.remove_client(session.client_id)
+
+
+@pytest.mark.asyncio
+async def test_sustained_stability_threshold_resets_retry_counter():
+    """
+    Verify that retry count is ONLY reset when BOTH conditions are satisfied:
+    1. Continuous healthy frames >= STABLE_FRAME_THRESHOLD (150)
+    2. Continuous elapsed time >= STABLE_DURATION_SECONDS (3.0s)
+    """
+    pipeline = AudioPipeline()
+    dummy_capture = DummyCapture(on_frame=pipeline.publish_pcm)
+    mgr = ConnectionManager(audio_pipeline=pipeline, audio_capture=dummy_capture)
+
+    session = await mgr.register_client("127.0.0.1:7500", client_id="stability-test-client")
+
+    # Simulate an error and wait for the automatically dispatched recovery task
+    mgr._handle_capture_error(RuntimeError("Transient hardware glitch"))
+    await asyncio.sleep(0.05)
+    if mgr._recovery_task and not mgr._recovery_task.done():
+        await mgr._recovery_task
+    assert mgr._capture_retry_count == 1
+    assert mgr.capture_error is not None
+
+    # Case A: Sufficient frames (150) but insufficient elapsed time (mock start to now)
+    mgr._capture_started_at = time.monotonic()  # 0 elapsed seconds
+    for _ in range(mgr.STABLE_FRAME_THRESHOLD):
+        mgr._notify_frame_produced()
+    # Should NOT reset because elapsed time < 3.0s
+    assert mgr._capture_retry_count == 1
+
+    # Case B: Sufficient elapsed time (3.5s) but insufficient frames (149)
+    mgr._consecutive_healthy_frames = 0
+    mgr._capture_started_at = time.monotonic() - 3.5  # 3.5s elapsed
+    for _ in range(mgr.STABLE_FRAME_THRESHOLD - 1):
+        mgr._notify_frame_produced()
+    # Should NOT reset because frames < 150
+    assert mgr._capture_retry_count == 1
+
+    # Case C: Both criteria met (150 frames AND 3.5s elapsed)
+    mgr._notify_frame_produced()  # Now hits 150 frames
+    assert mgr._capture_retry_count == 0
+    assert mgr.capture_error is None
 
     await mgr.remove_client(session.client_id)
 

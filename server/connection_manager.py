@@ -65,7 +65,8 @@ class ConnectionManager:
     """
 
     MAX_CAPTURE_RETRIES: int = 3
-    STABLE_FRAME_THRESHOLD: int = 5
+    STABLE_FRAME_THRESHOLD: int = 150  # ~3.0s at 50 fps (20ms per frame)
+    STABLE_DURATION_SECONDS: float = 3.0  # Continuous capture duration required for stability
 
     def __init__(
         self,
@@ -94,6 +95,7 @@ class ConnectionManager:
         self._capture_error: Optional[str] = None
         self._capture_retry_count: int = 0
         self._consecutive_healthy_frames: int = 0
+        self._capture_started_at: Optional[float] = None
 
         self._recovery_task: Optional[asyncio.Task] = None
         self._cleanup_task: Optional[asyncio.Task] = None
@@ -117,15 +119,26 @@ class ConnectionManager:
 
     def _notify_frame_produced(self) -> None:
         """
-        Tracks consecutive healthy frames to confirm stable capture.
-        Only resets retry count after sustained successful operation.
+        Tracks consecutive healthy frames and elapsed running time to confirm stable capture.
+        Only resets retry count after sustained successful operation (>= 150 frames AND >= 3.0s).
         """
         self._consecutive_healthy_frames += 1
-        if self._consecutive_healthy_frames >= self.STABLE_FRAME_THRESHOLD:
+        now = time.monotonic()
+        elapsed = (
+            (now - self._capture_started_at)
+            if self._capture_started_at is not None
+            else 0.0
+        )
+
+        if (
+            self._consecutive_healthy_frames >= self.STABLE_FRAME_THRESHOLD
+            and elapsed >= self.STABLE_DURATION_SECONDS
+        ):
             if self._capture_retry_count > 0 or self._capture_error is not None:
                 logger.info(
-                    "AudioCapture confirmed stable after %d frames. Resetting retry counters.",
+                    "AudioCapture confirmed sustained stable after %d frames (%.2fs continuous). Resetting retry counters.",
                     self._consecutive_healthy_frames,
+                    elapsed,
                 )
                 self._capture_retry_count = 0
                 self._capture_error = None
@@ -154,6 +167,7 @@ class ConnectionManager:
         Dispatches recovery scheduling onto the main event loop without calling get_running_loop.
         """
         self._consecutive_healthy_frames = 0
+        self._capture_started_at = None
         err_msg = str(error)
         logger.error("AudioCapture failure reported from worker thread: %s", err_msg)
         self._capture_error = err_msg
@@ -231,11 +245,14 @@ class ConnectionManager:
 
             try:
                 self.capture.start()
+                self._consecutive_healthy_frames = 0
+                self._capture_started_at = time.monotonic()
                 logger.info(
-                    "AudioCapture started on recovery attempt %d (awaiting frame confirmation).",
+                    "AudioCapture started on recovery attempt %d (awaiting sustained stability confirmation).",
                     self._capture_retry_count,
                 )
             except Exception as retry_err:
+                self._capture_started_at = None
                 logger.error(
                     "AudioCapture recovery attempt %d failed: %s",
                     self._capture_retry_count,
@@ -261,10 +278,12 @@ class ConnectionManager:
                     try:
                         self.capture.start()
                         self._consecutive_healthy_frames = 0
+                        self._capture_started_at = time.monotonic()
                         # Clear previous transient stop errors on fresh start
                         if self._capture_error == "AudioCapture thread failed to stop within timeout":
                             self._capture_error = None
                     except Exception as e:
+                        self._capture_started_at = None
                         logger.error("Failed to start audio capture: %s", e)
                         self._capture_error = str(e)
             else:
@@ -274,6 +293,7 @@ class ConnectionManager:
                     self._recovery_task = None
 
                 self._consecutive_healthy_frames = 0
+                self._capture_started_at = None
 
                 if self.capture.is_running:
                     logger.info("No active clients remaining (0). Stopping audio capture.")
@@ -284,9 +304,11 @@ class ConnectionManager:
                     else:
                         if self._capture_error == "AudioCapture thread failed to stop within timeout":
                             self._capture_error = None
+                        self._capture_retry_count = 0
                 else:
                     if self._capture_error == "AudioCapture thread failed to stop within timeout":
                         self._capture_error = None
+                    self._capture_retry_count = 0
 
     async def register_client(
         self,
