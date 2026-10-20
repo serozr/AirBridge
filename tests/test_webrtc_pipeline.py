@@ -1,6 +1,7 @@
 """
 Integration test: AudioPipeline -> PipelineAudioTrack -> av.AudioFrame
-Verifies WebRTC audio track consumption, PTS progression, and clean teardown.
+Verifies WebRTC audio track consumption, PTS progression, underrun recovery,
+and clean teardown.
 """
 
 import asyncio
@@ -24,12 +25,8 @@ async def test_pipeline_to_webrtc_track_integration():
 
     # 1. Publish 3 synthetic audio frames into the pipeline
     for i in range(3):
-        # Create unique pattern for each frame
         pcm = bytes([(i + 1) * 10] * BYTES_PER_FRAME_S16)
         pipeline.publish_pcm(pcm)
-
-    # Allow asyncio loop to schedule internal queue pushes
-    await asyncio.sleep(0.02)
 
     # 2. Consume from WebRTC audio track
     frame0 = await track.recv()
@@ -54,3 +51,32 @@ async def test_pipeline_to_webrtc_track_integration():
     track.stop()
     assert subscriber.active is False
     assert pipeline.get_subscriber_count() == 0
+
+
+@pytest.mark.asyncio
+async def test_webrtc_track_consecutive_underruns_and_recovery():
+    """
+    Verifies that PipelineAudioTrack maintains strictly monotonic PTS across
+    consecutive underruns (silence) and recovers when normal audio frames resume.
+    """
+    pipeline = AudioPipeline()
+    subscriber = pipeline.subscribe("test-track-underrun")
+    track = PipelineAudioTrack(subscriber=subscriber)
+
+    # Empty buffer: first 2 frames will underrun with short timeout
+    silence1 = await track.recv()
+    assert silence1.pts is not None
+
+    silence2 = await track.recv()
+    assert silence2.pts > silence1.pts
+    assert silence2.pts == silence1.pts + FRAME_SAMPLES
+
+    # Now real audio resumes
+    pcm = bytes([55] * BYTES_PER_FRAME_S16)
+    pipeline.publish_pcm(pcm)
+
+    audio_frame = await track.recv()
+    assert audio_frame.pts > silence2.pts
+    assert bytes(audio_frame.planes[0]) == pcm
+
+    track.stop()

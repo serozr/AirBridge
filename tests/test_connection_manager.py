@@ -1,6 +1,7 @@
 """
 Unit tests for ConnectionManager (server/connection_manager.py)
-Tests client registration, lifecycle management, and automatic capture start/stop.
+Tests client registration, lifecycle management, duplicate ID rejection,
+concurrent removal, and capture start/stop coordination.
 """
 
 import asyncio
@@ -22,9 +23,10 @@ class DummyCapture:
         self.is_running = True
         self.start_calls += 1
 
-    def stop(self):
+    def stop(self, timeout=2.0):
         self.is_running = False
         self.stop_calls += 1
+        return True
 
 
 @pytest.mark.asyncio
@@ -64,6 +66,50 @@ async def test_client_registration_and_removal():
     await mgr.remove_client(session2.client_id)
     assert mgr.client_count == 0
     assert dummy_capture.is_running is False
+    assert dummy_capture.stop_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_duplicate_client_id_rejected():
+    """Verify that registering a duplicate explicit client ID raises ValueError."""
+    pipeline = AudioPipeline()
+    dummy_capture = DummyCapture(on_frame=pipeline.publish_pcm)
+    mgr = ConnectionManager(audio_pipeline=pipeline, audio_capture=dummy_capture)
+
+    session1 = await mgr.register_client("127.0.0.1:1001", client_id="peer-fixed-1")
+    assert session1.client_id == "peer-fixed-1"
+
+    # Attempting to register another client with the exact same ID must fail
+    with pytest.raises(ValueError):
+        await mgr.register_client("127.0.0.1:1002", client_id="peer-fixed-1")
+
+    # Original session is preserved
+    assert mgr.client_count == 1
+    existing = await mgr.get_client("peer-fixed-1")
+    assert existing is session1
+
+    await mgr.remove_client("peer-fixed-1")
+    assert mgr.client_count == 0
+
+
+@pytest.mark.asyncio
+async def test_concurrent_client_removal():
+    """Verify that concurrent calls to remove_client operate safely and remove once."""
+    pipeline = AudioPipeline()
+    dummy_capture = DummyCapture(on_frame=pipeline.publish_pcm)
+    mgr = ConnectionManager(audio_pipeline=pipeline, audio_capture=dummy_capture)
+
+    session = await mgr.register_client("127.0.0.1:2001", client_id="concurrent-peer")
+    assert mgr.client_count == 1
+
+    # Simulate simultaneous disconnect from WebSocket and WebRTC state change
+    await asyncio.gather(
+        mgr.remove_client("concurrent-peer"),
+        mgr.remove_client("concurrent-peer"),
+        mgr.remove_client("concurrent-peer"),
+    )
+
+    assert mgr.client_count == 0
     assert dummy_capture.stop_calls == 1
 
 

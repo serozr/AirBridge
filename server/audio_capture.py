@@ -10,7 +10,7 @@ import logging
 import os
 import sys
 import threading
-from typing import Callable, Optional
+from typing import Callable, Optional, Any
 
 # Ensure project root is in sys.path
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -33,6 +33,7 @@ class AudioCapture:
     """
     Manages continuous loopback audio capture from the Windows default output device.
     Converts 48kHz float32 audio to normalized 16-bit signed PCM (s16le).
+    Thread-safe and race-safe lifecycle control.
     """
 
     def __init__(
@@ -41,22 +42,33 @@ class AudioCapture:
         channels: int = CHANNELS,
         frame_samples: int = FRAME_SAMPLES,
         on_frame: Optional[Callable[[bytes], None]] = None,
+        on_error: Optional[Callable[[Exception], None]] = None,
+        recorder_factory: Optional[Callable[[], Any]] = None,
     ) -> None:
         self.sample_rate = sample_rate
         self.channels = channels
         self.frame_samples = frame_samples
         self.on_frame = on_frame
+        self.on_error = on_error
+        self.recorder_factory = recorder_factory
 
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
-        self._recorder = None
+        self._stop_event = threading.Event()
         self._speaker = None
         self._loopback = None
+        self._last_error: Optional[Exception] = None
 
     @property
     def is_running(self) -> bool:
-        return self._running
+        with self._lock:
+            return self._running and self._thread is not None and self._thread.is_alive()
+
+    @property
+    def last_error(self) -> Optional[Exception]:
+        with self._lock:
+            return self._last_error
 
     @property
     def device_name(self) -> str:
@@ -72,13 +84,18 @@ class AudioCapture:
         Synchronously captures a single audio frame (20ms) from WASAPI loopback.
         Useful for testing and single-frame pull workflows.
         """
-        speaker = sc.default_speaker()
-        loopback = sc.get_microphone(speaker.name, include_loopback=True)
-        with loopback.recorder(
-            samplerate=self.sample_rate,
-            channels=self.channels,
-            blocksize=self.frame_samples,
-        ) as recorder:
+        if self.recorder_factory:
+            recorder_cm = self.recorder_factory()
+        else:
+            speaker = sc.default_speaker()
+            loopback = sc.get_microphone(speaker.name, include_loopback=True)
+            recorder_cm = loopback.recorder(
+                samplerate=self.sample_rate,
+                channels=self.channels,
+                blocksize=self.frame_samples,
+            )
+
+        with recorder_cm as recorder:
             data = recorder.record(numframes=self.frame_samples)
             data = np.asarray(data, dtype=np.float32)
             data_s16 = np.clip(data * 32767.0, -32768.0, 32767.0).astype(np.int16)
@@ -87,38 +104,85 @@ class AudioCapture:
     def start(self) -> None:
         """Starts continuous loopback capture in a background thread."""
         with self._lock:
-            if self._running:
+            if self._running and self._thread is not None and self._thread.is_alive():
                 return
-            self._running = True
-            self._thread = threading.Thread(target=self._capture_worker, daemon=True)
-            self._thread.start()
-            logger.info("AudioCapture background thread started.")
 
-    def stop(self) -> None:
-        """Stops loopback capture cleanly."""
+            # If previous thread is still alive, wait briefly
+            if self._thread is not None and self._thread.is_alive():
+                logger.warning("Previous capture thread is still alive; waiting before restart.")
+                self._thread.join(timeout=1.0)
+                if self._thread.is_alive():
+                    raise RuntimeError("Cannot start capture: previous capture thread is still running")
+
+            self._stop_event.clear()
+            self._last_error = None
+            self._running = True
+
+            try:
+                self._thread = threading.Thread(
+                    target=self._capture_worker,
+                    daemon=True,
+                    name="AirBridgeAudioCaptureWorker",
+                )
+                self._thread.start()
+                logger.info("AudioCapture background thread started.")
+            except Exception as e:
+                self._running = False
+                self._thread = None
+                self._last_error = e
+                logger.error("Failed to start AudioCapture thread: %s", e)
+                raise
+
+    def stop(self, timeout: float = 2.0) -> bool:
+        """
+        Stops loopback capture cleanly.
+        Returns True if the thread terminated, or False if the join timed out.
+        """
         with self._lock:
-            if not self._running:
-                return
+            if not self._running and (self._thread is None or not self._thread.is_alive()):
+                return True
+
             self._running = False
-        if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=1.0)
-        logger.info("AudioCapture background thread stopped.")
+            self._stop_event.set()
+            thread = self._thread
+
+        stopped = True
+        if thread and thread.is_alive():
+            thread.join(timeout=timeout)
+            if thread.is_alive():
+                logger.warning(
+                    "AudioCapture thread did not terminate within %.1f second timeout.",
+                    timeout,
+                )
+                stopped = False
+            else:
+                logger.info("AudioCapture background thread stopped cleanly.")
+
+        with self._lock:
+            if stopped:
+                self._thread = None
+
+        return stopped
 
     def _capture_worker(self) -> None:
         """Dedicated background loop capturing continuous WASAPI loopback blocks."""
         try:
-            self._speaker = sc.default_speaker()
-            self._loopback = sc.get_microphone(
-                self._speaker.name, include_loopback=True
-            )
-            logger.info("Capturing loopback from: %s", self._speaker.name)
+            if self.recorder_factory:
+                recorder_cm = self.recorder_factory()
+            else:
+                self._speaker = sc.default_speaker()
+                self._loopback = sc.get_microphone(
+                    self._speaker.name, include_loopback=True
+                )
+                logger.info("Capturing loopback from: %s", self._speaker.name)
+                recorder_cm = self._loopback.recorder(
+                    samplerate=self.sample_rate,
+                    channels=self.channels,
+                    blocksize=self.frame_samples,
+                )
 
-            with self._loopback.recorder(
-                samplerate=self.sample_rate,
-                channels=self.channels,
-                blocksize=self.frame_samples,
-            ) as recorder:
-                while self._running:
+            with recorder_cm as recorder:
+                while self._running and not self._stop_event.is_set():
                     # Synchronous blocking read of 20ms (960 frames)
                     data = recorder.record(numframes=self.frame_samples)
                     data = np.asarray(data, dtype=np.float32)
@@ -129,13 +193,21 @@ class AudioCapture:
                     ).astype(np.int16)
                     pcm_bytes = data_s16.tobytes()
 
-                    if self.on_frame:
+                    if self.on_frame and not self._stop_event.is_set():
                         self.on_frame(pcm_bytes)
 
         except Exception as e:
             logger.error("Exception in AudioCapture loop: %s", e)
+            with self._lock:
+                self._last_error = e
+            if self.on_error:
+                try:
+                    self.on_error(e)
+                except Exception as cb_err:
+                    logger.debug("Error in on_error callback: %s", cb_err)
         finally:
-            self._running = False
+            with self._lock:
+                self._running = False
 
 
 def main():

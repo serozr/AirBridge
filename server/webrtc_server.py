@@ -1,13 +1,11 @@
 """
-AirBridge - Server-side WebRTC Streaming Service (v0.2.0)
+AirBridge - WebRTC Audio Streaming Server
 
-Architecture:
-    Windows Master Output
-    -> AudioCapture (WASAPI Loopback)
-    -> AudioPipeline (Monotonic PTS, Bounded Queue, Drop-Oldest Frame Policy)
-    -> PipelineAudioTrack (aiortc s16 AudioFrame & Native Opus Encoder)
-    -> ConnectionManager (Multi-Client Lifecycles & State Tracking)
-    -> Browser & iPhone Safari WebRTC Receiver
+Orchestration layer:
+    - FastAPI HTTP & WebSocket signaling.
+    - WebRTC SDP offer/answer exchange via aiortc.
+    - PipelineAudioTrack yielding 48kHz stereo frames to WebRTC's Opus encoder.
+    - Delegates client lifecycle and audio capture to ConnectionManager.
 """
 
 import asyncio
@@ -16,36 +14,39 @@ import json
 import logging
 import os
 import sys
+from contextlib import asynccontextmanager
+from typing import Dict, Any, Optional
 
-# Ensure project root is in sys.path when running script directly
+# Ensure project root is in sys.path
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from contextlib import asynccontextmanager
-from typing import Dict, Any
-
 import av
-from aiortc import RTCPeerConnection, RTCSessionDescription, RTCConfiguration
-from aiortc.mediastreams import AudioStreamTrack
+from aiortc import (
+    AudioStreamTrack,
+    RTCConfiguration,
+    RTCIceCandidate,
+    RTCPeerConnection,
+    RTCSessionDescription,
+)
 from aiortc.sdp import candidate_from_sdp
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse
 import uvicorn
 
 from server.config import (
+    CHANNELS,
     DEFAULT_HOST,
     DEFAULT_PORT,
     FRAME_DURATION_MS,
     FRAME_SAMPLES,
     MAX_BUFFER_FRAMES,
     SAMPLE_RATE,
-    CHANNELS,
 )
-from server.audio_pipeline import AudioPipeline, AudioSubscriber, pipeline
-from server.connection_manager import ConnectionManager, connection_manager
+from server.audio_pipeline import AudioSubscriber, pipeline
+from server.connection_manager import connection_manager
 
-# Configure clean logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
@@ -57,6 +58,7 @@ class PipelineAudioTrack(AudioStreamTrack):
     """
     aiortc AudioStreamTrack consuming frames from the central AudioPipeline.
     Delivers 48kHz stereo 20ms frames to WebRTC's native Opus encoder.
+    Maintains a strictly monotonic outgoing PTS timeline.
     """
 
     kind = "audio"
@@ -65,19 +67,32 @@ class PipelineAudioTrack(AudioStreamTrack):
         super().__init__()
         self.subscriber = subscriber
         self._time_base = fractions.Fraction(1, SAMPLE_RATE)
+        self._last_track_pts: Optional[int] = None
 
     async def recv(self) -> av.AudioFrame:
         """Called by aiortc media engine for each outgoing 20ms audio frame."""
         frame_data = await self.subscriber.get_frame(timeout=0.08)
 
+        # Ensure strictly monotonic PTS progression for the outgoing WebRTC track
+        if self._last_track_pts is None:
+            self._last_track_pts = frame_data.pts
+        else:
+            expected_pts = self._last_track_pts + frame_data.samples
+            if frame_data.pts > expected_pts:
+                # Normal forward gap when frames were dropped intentionally
+                self._last_track_pts = frame_data.pts
+            else:
+                # Stale frame or repeated silence: guarantee monotonic progress
+                self._last_track_pts = expected_pts
+
         frame = av.AudioFrame(
             format="s16",
             layout="stereo",
-            samples=frame_data.samples
+            samples=frame_data.samples,
         )
         frame.planes[0].update(frame_data.data)
         frame.sample_rate = frame_data.sample_rate
-        frame.pts = frame_data.pts
+        frame.pts = self._last_track_pts
         frame.time_base = self._time_base
         return frame
 
@@ -135,8 +150,16 @@ def get_lan_info() -> Dict[str, Any]:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("AirBridge WebRTC Server starting up...")
+    cleanup_task = asyncio.create_task(
+        connection_manager.start_cleanup_loop(interval_seconds=15.0, max_idle_seconds=300.0)
+    )
     yield
     logger.info("Server shutting down, closing all connections...")
+    cleanup_task.cancel()
+    try:
+        await cleanup_task
+    except asyncio.CancelledError:
+        pass
     await connection_manager.close_all()
 
 
@@ -184,40 +207,41 @@ async def websocket_signaling(websocket: WebSocket):
     client_addr = f"{websocket.client.host}:{websocket.client.port}" if websocket.client else "unknown"
     loop = asyncio.get_running_loop()
 
-    # Register client session
-    session = await connection_manager.register_client(
-        client_address=client_addr,
-        websocket=websocket,
-    )
-    cid = session.client_id
-    logger.info("Signaling connected: Client ID %s (%s)", cid, client_addr)
-
-    # Initialize WebRTC peer connection (local ICE for sub-millisecond handshake)
-    pc = RTCPeerConnection(configuration=RTCConfiguration(iceServers=[]))
-    session.pc = pc
-
-    # Subscribe to central audio pipeline
-    subscriber = pipeline.subscribe(subscriber_id=cid, loop=loop)
-    session.subscriber = subscriber
-
-    track = PipelineAudioTrack(subscriber=subscriber)
-    pc.addTrack(track)
-
-    @pc.on("connectionstatechange")
-    async def on_connectionstatechange():
-        state = pc.connectionState
-        logger.info("[WebRTC] Client %s PeerConnection state: %s", cid, state)
-        await connection_manager.update_states(cid, connection_state=state)
-        if state in ("failed", "closed"):
-            await connection_manager.remove_client(cid)
-
-    @pc.on("iceconnectionstatechange")
-    async def on_iceconnectionstatechange():
-        state = pc.iceConnectionState
-        logger.info("[WebRTC] Client %s ICE state: %s", cid, state)
-        await connection_manager.update_states(cid, ice_state=state)
-
+    cid: Optional[str] = None
     try:
+        # Register client session
+        session = await connection_manager.register_client(
+            client_address=client_addr,
+            websocket=websocket,
+        )
+        cid = session.client_id
+        logger.info("Signaling connected: Client ID %s (%s)", cid, client_addr)
+
+        # Initialize WebRTC peer connection (local ICE for sub-millisecond handshake)
+        pc = RTCPeerConnection(configuration=RTCConfiguration(iceServers=[]))
+        session.pc = pc
+
+        # Subscribe to central audio pipeline
+        subscriber = pipeline.subscribe(subscriber_id=cid, loop=loop)
+        session.subscriber = subscriber
+
+        track = PipelineAudioTrack(subscriber=subscriber)
+        pc.addTrack(track)
+
+        @pc.on("connectionstatechange")
+        async def on_connectionstatechange():
+            state = pc.connectionState
+            logger.info("[WebRTC] Client %s PeerConnection state: %s", cid, state)
+            await connection_manager.update_states(cid, connection_state=state)
+            if state in ("failed", "closed"):
+                await connection_manager.remove_client(cid)
+
+        @pc.on("iceconnectionstatechange")
+        async def on_iceconnectionstatechange():
+            state = pc.iceConnectionState
+            logger.info("[WebRTC] Client %s ICE state: %s", cid, state)
+            await connection_manager.update_states(cid, ice_state=state)
+
         while True:
             raw_data = await websocket.receive_text()
             session.touch()
@@ -261,7 +285,8 @@ async def websocket_signaling(websocket: WebSocket):
     except Exception as e:
         logger.error("Exception in WebSocket session (%s): %s", cid, e)
     finally:
-        await connection_manager.remove_client(cid)
+        if cid:
+            await connection_manager.remove_client(cid)
 
 
 if __name__ == "__main__":

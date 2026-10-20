@@ -33,6 +33,16 @@ class AudioFrameData:
 class PipelineMetrics:
     """
     Realtime telemetry metrics for the audio pipeline.
+
+    Definitions:
+        - frames_produced: Total unique raw PCM frames published by the capture thread.
+        - frames_consumed: Total frames delivered to consumer tracks across all subscribers.
+        - frames_dropped: Total frames dropped across all subscribers due to buffer overflow (drop-oldest).
+        - buffer_depth: Current maximum buffer depth across active subscribers.
+        - buffer_peak: Historical peak buffer depth observed across any subscriber.
+        - underruns: Total count of times a consumer buffer was empty and had to wait/synthesize silence.
+        - overruns: Count of times a subscriber buffer reached capacity and had to drop a frame.
+        - current_pts: Current monotonic Presentation Time Stamp (sample counter) of the pipeline.
     """
     frames_produced: int = 0
     frames_consumed: int = 0

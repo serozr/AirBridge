@@ -1,6 +1,7 @@
 """
 Unit tests for AudioPipeline (server/audio_pipeline.py)
-Tests bounded buffer, drop-oldest frame policy, monotonic PTS, and metrics.
+Tests bounded buffer, drop-oldest frame policy, monotonic PTS, underrun recovery,
+and multi-subscriber isolation.
 """
 
 import asyncio
@@ -52,6 +53,33 @@ def test_monotonic_pts_progression():
 
 
 @pytest.mark.asyncio
+async def test_invalid_buffer_size_rejected():
+    """Verify that invalid buffer sizes are rejected."""
+    pipeline = AudioPipeline()
+    with pytest.raises(ValueError):
+        pipeline.subscribe("sub-invalid-0", max_buffer_frames=0)
+    with pytest.raises(ValueError):
+        pipeline.subscribe("sub-invalid-neg", max_buffer_frames=-5)
+
+
+@pytest.mark.asyncio
+async def test_duplicate_subscriber_id_rejected():
+    """Verify that registering duplicate subscriber IDs raises ValueError."""
+    pipeline = AudioPipeline()
+    sub1 = pipeline.subscribe("sub-dup-1")
+    assert sub1 is not None
+
+    with pytest.raises(ValueError):
+        pipeline.subscribe("sub-dup-1")
+
+    sub1.close()
+    # After close, ID can be re-used
+    sub2 = pipeline.subscribe("sub-dup-1")
+    assert sub2 is not None
+    sub2.close()
+
+
+@pytest.mark.asyncio
 async def test_bounded_buffer_and_oldest_frame_drop():
     """
     Verify that when buffer reaches max_buffer_frames,
@@ -63,22 +91,17 @@ async def test_bounded_buffer_and_oldest_frame_drop():
     subscriber = pipeline.subscribe("test-sub-1", max_buffer_frames=max_frames)
 
     # Push 4 frames into a buffer of max_frames=3
-    # Frame 1: fill_byte = 1
-    # Frame 2: fill_byte = 2
-    # Frame 3: fill_byte = 3
-    # Frame 4: fill_byte = 4 (should cause Frame 1 to be dropped)
     for i in range(1, 5):
         pipeline.publish_pcm(generate_synthetic_frame(i))
 
-    # Give event loop a cycle to schedule the threadsafe pushes
-    await asyncio.sleep(0.02)
+    await asyncio.sleep(0.01)
 
     metrics = pipeline.get_metrics()
     assert metrics.frames_produced == 4
     assert metrics.frames_dropped == 1
     assert metrics.overruns == 1
     assert subscriber.frames_dropped == 1
-    assert len(subscriber._buffer) == 3
+    assert subscriber.buffer_depth == 3
 
     # The buffer should now contain frames 2, 3, 4 (Frame 1 was dropped)
     f2 = await subscriber.get_frame(timeout=0.05)
@@ -94,44 +117,99 @@ async def test_bounded_buffer_and_oldest_frame_drop():
 
 
 @pytest.mark.asyncio
-async def test_underrun_detection_and_silence_fallback():
+async def test_consecutive_underruns_advance_pts():
     """
-    Verify that consuming from an empty buffer records an underrun
-    and returns a silence frame if timeout expires.
+    Verify that consecutive underruns return silence frames with strictly
+    advancing PTS (never repeated PTS).
     """
     pipeline = AudioPipeline()
-    subscriber = pipeline.subscribe("test-sub-underrun")
+    subscriber = pipeline.subscribe("test-sub-underrun-pts")
 
-    # Buffer is empty: get_frame with short timeout should detect underrun and fallback to silence
-    frame = await subscriber.get_frame(timeout=0.03)
-    assert len(frame.data) == BYTES_PER_FRAME_S16
-    assert frame.data == b"\x00" * BYTES_PER_FRAME_S16
-    assert subscriber.underruns >= 1
+    silence1 = await subscriber.get_frame(timeout=0.02)
+    assert silence1.data == b"\x00" * BYTES_PER_FRAME_S16
+    assert subscriber.underruns == 1
 
-    metrics = pipeline.get_metrics()
-    assert metrics.underruns >= 1
+    silence2 = await subscriber.get_frame(timeout=0.02)
+    assert silence2.data == b"\x00" * BYTES_PER_FRAME_S16
+    assert subscriber.underruns == 2
+    assert silence2.pts == silence1.pts + FRAME_SAMPLES
+
+    silence3 = await subscriber.get_frame(timeout=0.02)
+    assert silence3.data == b"\x00" * BYTES_PER_FRAME_S16
+    assert subscriber.underruns == 3
+    assert silence3.pts == silence2.pts + FRAME_SAMPLES
+
     subscriber.close()
 
 
 @pytest.mark.asyncio
-async def test_multi_subscriber_fanout():
+async def test_frame_arriving_during_wait():
     """
-    Verify that a single published frame is dispatched to multiple independent subscribers.
+    Verify that a consumer waiting on an empty buffer wakes up immediately
+    when a producer publishes a frame.
     """
     pipeline = AudioPipeline()
-    sub_a = pipeline.subscribe("client-a")
-    sub_b = pipeline.subscribe("client-b")
+    subscriber = pipeline.subscribe("test-sub-wait")
 
-    pipeline.publish_pcm(generate_synthetic_frame(42))
-    await asyncio.sleep(0.01)
+    async def producer():
+        await asyncio.sleep(0.03)
+        pipeline.publish_pcm(generate_synthetic_frame(99))
 
-    frame_a = await sub_a.get_frame(timeout=0.05)
-    frame_b = await sub_b.get_frame(timeout=0.05)
+    producer_task = asyncio.create_task(producer())
 
-    assert frame_a.data == frame_b.data
-    assert frame_a.pts == frame_b.pts
-    assert frame_a.data[0] == 42
+    # get_frame waits up to 0.1s; producer publishes at 0.03s
+    frame = await subscriber.get_frame(timeout=0.1)
+    await producer_task
 
-    sub_a.close()
-    sub_b.close()
-    assert pipeline.get_subscriber_count() == 0
+    assert frame.data[0] == 99
+    assert subscriber.underruns == 0
+    subscriber.close()
+
+
+@pytest.mark.asyncio
+async def test_dropped_frames_followed_by_silence():
+    """
+    Verify that when frames are dropped and the buffer is drained,
+    subsequent silence frames advance monotonically from the last delivered PTS.
+    """
+    pipeline = AudioPipeline()
+    subscriber = pipeline.subscribe("test-drop-silence", max_buffer_frames=2)
+
+    # Publish 4 frames (frames 0, 1 dropped; 2, 3 in buffer)
+    for i in range(4):
+        pipeline.publish_pcm(generate_synthetic_frame(i))
+
+    f2 = await subscriber.get_frame(timeout=0.05)
+    f3 = await subscriber.get_frame(timeout=0.05)
+    assert f3.pts > f2.pts
+
+    # Buffer is now empty; underrun should yield silence with pts > f3.pts
+    silence = await subscriber.get_frame(timeout=0.02)
+    assert silence.pts >= f3.pts + FRAME_SAMPLES
+    assert silence.data == b"\x00" * BYTES_PER_FRAME_S16
+
+    subscriber.close()
+
+
+@pytest.mark.asyncio
+async def test_subscriber_buffer_isolation():
+    """
+    Verify that a slow subscriber buffer overflow does not affect a fast subscriber.
+    """
+    pipeline = AudioPipeline()
+    fast_sub = pipeline.subscribe("fast-sub", max_buffer_frames=10)
+    slow_sub = pipeline.subscribe("slow-sub", max_buffer_frames=2)
+
+    for i in range(5):
+        pipeline.publish_pcm(generate_synthetic_frame(i))
+
+    # Slow sub dropped 3 frames
+    assert slow_sub.frames_dropped == 3
+    assert slow_sub.buffer_depth == 2
+
+    # Fast sub dropped 0 frames
+    assert fast_sub.frames_dropped == 0
+    assert fast_sub.buffer_depth == 5
+
+    fast_sub.close()
+    slow_sub.close()
