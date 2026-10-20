@@ -66,6 +66,35 @@ AirBridge captures Windows system output with **WASAPI loopback** and sends live
 
 ## 🚀 Quick Start
 
+### Requirements
+
+- Windows 10/11, 64-bit
+- Python 3.12 recommended (the dependency set includes native audio/WebRTC components)
+- iPhone and PC connected to the same local Wi-Fi network
+
+### Install
+
+```powershell
+git clone https://github.com/serozr/AirBridge.git
+cd AirBridge
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+### Run
+
+```powershell
+python -u server/webrtc_server.py
+```
+
+Use the LAN URL printed by the server on your iPhone in Safari. Tap **Connect & Stream**, then play audio on your PC.
+
+> If PowerShell blocks virtual-environment activation, run the venv interpreter directly instead: `.\.venv\Scripts\python.exe -m pip install -r requirements.txt` and `.\.venv\Scripts\python.exe -u server/webrtc_server.py`.
+
+## 🚀 Quick Start
+
 ### 1. Prerequisites
 
 - **Windows 10 or Windows 11**
