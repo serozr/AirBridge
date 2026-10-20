@@ -18,3 +18,12 @@ MAX_BUFFER_FRAMES: int = int(os.getenv("AIRBRIDGE_MAX_BUFFER_FRAMES", "15"))
 # Server Network settings
 DEFAULT_HOST: str = os.getenv("AIRBRIDGE_HOST", "0.0.0.0")
 DEFAULT_PORT: int = int(os.getenv("AIRBRIDGE_PORT", "8000"))
+
+# Security settings
+ENABLE_SECURITY: bool = os.getenv("AIRBRIDGE_SECURITY_ENABLED", "true").lower() in ("true", "1", "yes")
+SESSION_TTL_SECONDS: int = int(os.getenv("AIRBRIDGE_SESSION_TTL_SECONDS", "86400"))  # 24 hours
+MAX_PIN_ATTEMPTS: int = int(os.getenv("AIRBRIDGE_MAX_PIN_ATTEMPTS", "3"))
+LOCKOUT_DURATION_SECONDS: int = int(os.getenv("AIRBRIDGE_LOCKOUT_SECONDS", "300"))  # 5 minutes
+CONFIGURED_PIN: str = os.getenv("AIRBRIDGE_PIN", "")
+ALLOWED_ORIGINS: str = os.getenv("AIRBRIDGE_ALLOWED_ORIGINS", "")
+

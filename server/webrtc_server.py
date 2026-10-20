@@ -31,8 +31,9 @@ from aiortc import (
     RTCSessionDescription,
 )
 from aiortc.sdp import candidate_from_sdp
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 import uvicorn
 
 from server.config import (
@@ -46,6 +47,11 @@ from server.config import (
 )
 from server.audio_pipeline import AudioSubscriber, pipeline
 from server.connection_manager import connection_manager
+from server.security import security_manager
+
+class AuthRequest(BaseModel):
+    pin: Optional[str] = None
+    token: Optional[str] = None
 
 logging.basicConfig(
     level=logging.INFO,
@@ -183,6 +189,63 @@ async def get_network_info():
     return get_lan_info()
 
 
+@app.post("/api/auth")
+async def authenticate(request: Request, body: AuthRequest):
+    """
+    Verifies pairing PIN or validates an existing session token.
+    Enforces origin validation, constant-time PIN comparison, and rate-limiting.
+    """
+    origin = request.headers.get("origin")
+    host = request.headers.get("host")
+    if not security_manager.validate_origin(origin, host):
+        raise HTTPException(status_code=403, detail="Unauthorized Origin")
+
+    client_ip = request.client.host if request.client else "unknown"
+
+    if body.token:
+        if security_manager.validate_token(body.token, client_ip):
+            return {
+                "status": "ok",
+                "authenticated": True,
+                "token": body.token,
+                "session_id": security_manager.server_session_id,
+            }
+        else:
+            raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    if body.pin:
+        success, token, err = security_manager.verify_pin(body.pin, client_ip)
+        if success and token:
+            return {
+                "status": "ok",
+                "authenticated": True,
+                "token": token,
+                "session_id": security_manager.server_session_id,
+            }
+        else:
+            is_locked, _ = security_manager.rate_limiter.is_locked(client_ip)
+            status_code = 429 if is_locked else 401
+            raise HTTPException(status_code=status_code, detail=err or "Invalid PIN")
+
+    raise HTTPException(status_code=400, detail="Either 'pin' or 'token' must be provided")
+
+
+@app.get("/api/auth/status")
+async def auth_status(request: Request, token: Optional[str] = None):
+    """Checks session validity for the client."""
+    client_ip = request.client.host if request.client else "unknown"
+    auth_header = request.headers.get("authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header[7:].strip()
+
+    is_valid = security_manager.validate_token(token, client_ip)
+    return {
+        "authenticated": is_valid,
+        "security_enabled": security_manager.enabled,
+        "session_id": security_manager.server_session_id,
+    }
+
+
 @app.get("/health")
 async def health_check():
     """Service health and telemetry endpoint."""
@@ -193,11 +256,16 @@ async def health_check():
     return {
         "status": overall_status,
         "service": "airbridge",
-        "version": "0.2.0",
+        "version": "0.3.0",
         "clients": connection_manager.client_count,
         "active_peers": connection_manager.client_count,
         "lan_ip": info["primary_ip"],
         "lan_url": info["lan_url"],
+        "security": {
+            "enabled": security_manager.enabled,
+            "session_id": security_manager.server_session_id,
+            "active_sessions": security_manager.active_session_count(),
+        },
         "capture": capture_health,
         "audio": metrics.to_dict(),
     }
@@ -207,9 +275,68 @@ async def health_check():
 async def websocket_signaling(websocket: WebSocket):
     """
     WebSocket signaling endpoint for exchanging SDP offers/answers and ICE candidates.
+    Protected by origin validation and token/PIN session authentication.
     """
+    origin = websocket.headers.get("origin")
+    host = websocket.headers.get("host")
+    if not security_manager.validate_origin(origin, host):
+        logger.warning("WebSocket rejected: unauthorized origin '%s'", origin)
+        await websocket.close(code=4403, reason="Unauthorized Origin")
+        return
+
+    client_ip = websocket.client.host if websocket.client else "unknown"
+    client_addr = f"{client_ip}:{websocket.client.port}" if websocket.client else "unknown"
+
+    token = websocket.query_params.get("token")
+    authenticated = False
+
+    if token:
+        if security_manager.validate_token(token, client_ip):
+            authenticated = True
+        else:
+            logger.warning("WebSocket rejected: invalid or expired query token from %s", client_addr)
+            await websocket.close(code=4401, reason="Invalid or Expired Token")
+            return
+
     await websocket.accept()
-    client_addr = f"{websocket.client.host}:{websocket.client.port}" if websocket.client else "unknown"
+
+    # If not authenticated via query parameter, require immediate auth handshake message
+    if not authenticated:
+        try:
+            raw_auth = await asyncio.wait_for(websocket.receive_text(), timeout=5.0)
+            auth_msg = json.loads(raw_auth)
+            if auth_msg.get("type") == "auth":
+                msg_token = auth_msg.get("token")
+                msg_pin = auth_msg.get("pin")
+                if msg_token and security_manager.validate_token(msg_token, client_ip):
+                    authenticated = True
+                    await websocket.send_json({"type": "auth_ok", "token": msg_token})
+                elif msg_pin:
+                    valid, new_token, err = security_manager.verify_pin(msg_pin, client_ip)
+                    if valid and new_token:
+                        authenticated = True
+                        await websocket.send_json({"type": "auth_ok", "token": new_token})
+                    else:
+                        await websocket.send_json({"type": "auth_fail", "error": err or "Invalid PIN"})
+                        await websocket.close(code=4401, reason="Authentication Failed")
+                        return
+                else:
+                    await websocket.send_json({"type": "auth_fail", "error": "Invalid auth payload"})
+                    await websocket.close(code=4401, reason="Authentication Failed")
+                    return
+            else:
+                await websocket.send_json({"type": "auth_fail", "error": "Authentication required"})
+                await websocket.close(code=4401, reason="Authentication Required")
+                return
+        except asyncio.TimeoutError:
+            logger.warning("WebSocket auth handshake timeout from %s", client_addr)
+            await websocket.close(code=4408, reason="Authentication Timeout")
+            return
+        except Exception as e:
+            logger.warning("WebSocket auth error from %s: %s", client_addr, e)
+            await websocket.close(code=4400, reason="Bad Request")
+            return
+
     loop = asyncio.get_running_loop()
 
     cid: Optional[str] = None
@@ -298,7 +425,7 @@ async def websocket_signaling(websocket: WebSocket):
 if __name__ == "__main__":
     info = get_lan_info()
     print("=" * 66)
-    print("  AirBridge v0.2.0 - Audio Pipeline & Connection Core")
+    print("  AirBridge v0.3.0 - Security Layer & Audio Pipeline")
     print("=" * 66)
     print("  Audio:")
     print(f"    Sample rate:  {SAMPLE_RATE} Hz")
@@ -309,6 +436,8 @@ if __name__ == "__main__":
     print(f"    Listening:    {DEFAULT_HOST}:{info['port']}")
     print(f"    Local PC URL: http://localhost:{info['port']}")
     print(f"    LAN URL:      {info['lan_url']}")
+    print("-" * 66)
+    print(security_manager.get_security_banner())
     print("-" * 66)
     print(f"  >> On your iPhone (Safari connected to the same Wi-Fi):")
     print(f"     Open: {info['lan_url']}")

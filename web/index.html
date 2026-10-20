@@ -242,6 +242,68 @@
       to { opacity: 1; }
     }
 
+    /* Security PIN Card */
+    .security-card {
+      background: rgba(30, 41, 59, 0.65);
+      border: 1px solid rgba(59, 130, 246, 0.35);
+      border-radius: 14px;
+      padding: 16px 18px;
+      margin-bottom: 20px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+      transition: all 0.3s ease;
+    }
+
+    .security-header {
+      font-size: 14px;
+      font-weight: 600;
+      color: #38bdf8;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+
+    .security-desc {
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-bottom: 12px;
+      line-height: 1.4;
+    }
+
+    .pin-input-group {
+      display: flex;
+      gap: 10px;
+    }
+
+    .pin-input {
+      flex: 1;
+      background: rgba(0, 0, 0, 0.55);
+      border: 1px solid var(--card-border);
+      border-radius: 10px;
+      padding: 10px 14px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: 5px;
+      text-align: center;
+      color: #f3f4f6;
+      outline: none;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+
+    .pin-input:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 12px rgba(59, 130, 246, 0.4);
+    }
+
+    .security-error {
+      color: var(--danger);
+      font-size: 12px;
+      margin-top: 8px;
+      display: none;
+      font-weight: 500;
+    }
+
     /* Visualizer */
     .visualizer-container {
       background: rgba(0, 0, 0, 0.45);
@@ -448,6 +510,21 @@
       <canvas id="visualizerCanvas"></canvas>
     </div>
 
+    <!-- Security PIN Verification Card -->
+    <div class="security-card" id="securityCard" style="display: none;">
+      <div class="security-header">
+        <span>🔐 Pairing PIN Required</span>
+      </div>
+      <div class="security-desc">
+        Enter the 6-digit PIN displayed on your PC terminal to stream:
+      </div>
+      <div class="pin-input-group">
+        <input type="text" class="pin-input" id="pinInput" maxlength="6" inputmode="numeric" pattern="[0-9]*" placeholder="••••••" autocomplete="one-time-code">
+        <button class="btn btn-primary" id="unlockBtn" style="flex: 0 0 110px;">Unlock</button>
+      </div>
+      <div class="security-error" id="securityError"></div>
+    </div>
+
     <!-- Controls -->
     <div class="controls">
       <button class="btn btn-primary" id="connectBtn">▶ Connect & Stream</button>
@@ -508,6 +585,11 @@
     const statJitter = document.getElementById('statJitter');
     const statRtt = document.getElementById('statRtt');
 
+    const securityCard = document.getElementById('securityCard');
+    const pinInput = document.getElementById('pinInput');
+    const unlockBtn = document.getElementById('unlockBtn');
+    const securityError = document.getElementById('securityError');
+
     const canvas = document.getElementById('visualizerCanvas');
     const canvasCtx = canvas.getContext('2d');
 
@@ -521,6 +603,65 @@
     let audioCtx = null;
     let analyser = null;
     let animFrame = null;
+
+    // Security token management
+    const urlParams = new URLSearchParams(window.location.search);
+    let authToken = urlParams.get('token') || sessionStorage.getItem('airbridge_token');
+    const urlPin = urlParams.get('pin');
+
+    async function checkOrAuthenticatePin(pinToVerify) {
+      securityError.style.display = 'none';
+      unlockBtn.disabled = true;
+      unlockBtn.textContent = 'Verifying...';
+
+      try {
+        const resp = await fetch('/api/auth', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pin: pinToVerify })
+        });
+        const data = await resp.json();
+
+        if (resp.ok && data.token) {
+          authToken = data.token;
+          sessionStorage.setItem('airbridge_token', authToken);
+          securityCard.style.display = 'none';
+          log('Authenticated successfully with pairing PIN.', 'success');
+          startConnection();
+        } else {
+          securityError.textContent = data.detail || 'Invalid PIN.';
+          securityError.style.display = 'block';
+          pinInput.focus();
+        }
+      } catch (err) {
+        securityError.textContent = 'Authentication network error.';
+        securityError.style.display = 'block';
+      } finally {
+        unlockBtn.disabled = false;
+        unlockBtn.textContent = 'Unlock';
+      }
+    }
+
+    if (unlockBtn) {
+      unlockBtn.addEventListener('click', () => {
+        const pinVal = pinInput.value.trim();
+        if (pinVal) checkOrAuthenticatePin(pinVal);
+      });
+    }
+
+    if (pinInput) {
+      pinInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          const pinVal = pinInput.value.trim();
+          if (pinVal) checkOrAuthenticatePin(pinVal);
+        }
+      });
+    }
+
+    // Auto-authenticate if PIN is provided in URL query string (?pin=123456)
+    if (urlPin && !authToken) {
+      checkOrAuthenticatePin(urlPin);
+    }
 
     // Logging helpers
     function log(text, type = 'info') {
@@ -604,6 +745,25 @@
     async function startConnection() {
       log('User initiated connection sequence...', 'info');
 
+      // Check authentication token
+      if (!authToken) {
+        try {
+          const statusResp = await fetch('/api/auth/status');
+          const statusData = await statusResp.json();
+          if (statusData.security_enabled && !statusData.authenticated) {
+            securityCard.style.display = 'block';
+            pinInput.focus();
+            connectBtn.disabled = false;
+            connectBtn.textContent = '▶ Connect & Stream';
+            disconnectBtn.disabled = true;
+            log('Pairing PIN required before streaming.', 'warn');
+            return;
+          }
+        } catch (e) {
+          log(`Auth status check note: ${e.message}`, 'warn');
+        }
+      }
+
       // Update UI button state immediately
       connectBtn.disabled = true;
       connectBtn.textContent = '⏳ Connecting...';
@@ -628,8 +788,8 @@
       setStatus(pcDot, pcText, 'connecting', 'Preparing');
 
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}/ws`;
-      log(`Opening WebSocket signaling: ${wsUrl}`, 'info');
+      const wsUrl = `${protocol}//${window.location.host}/ws` + (authToken ? `?token=${encodeURIComponent(authToken)}` : '');
+      log(`Opening WebSocket signaling: ${protocol}//${window.location.host}/ws`, 'info');
 
       try {
         ws = new WebSocket(wsUrl);
@@ -661,6 +821,14 @@
 
       ws.onclose = (event) => {
         log(`WebSocket closed (code: ${event.code}, reason: ${event.reason || 'normal'})`, 'warn');
+        if (event.code === 4401 || event.code === 4403) {
+          sessionStorage.removeItem('airbridge_token');
+          authToken = null;
+          securityCard.style.display = 'block';
+          securityError.textContent = event.reason || 'Authentication failed or session expired. Please enter PIN.';
+          securityError.style.display = 'block';
+          pinInput.focus();
+        }
         setStatus(wsDot, wsText, 'failed', 'Closed');
         cleanup();
       };
