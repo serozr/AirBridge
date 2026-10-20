@@ -186,14 +186,17 @@ async def health_check():
     """Service health and telemetry endpoint."""
     info = get_lan_info()
     metrics = pipeline.get_metrics()
+    capture_health = connection_manager.get_capture_health()
+    overall_status = "ok" if capture_health["status"] != "error" else "degraded"
     return {
-        "status": "ok",
+        "status": overall_status,
         "service": "airbridge",
         "version": "0.2.0",
         "clients": connection_manager.client_count,
         "active_peers": connection_manager.client_count,
         "lan_ip": info["primary_ip"],
         "lan_url": info["lan_url"],
+        "capture": capture_health,
         "audio": metrics.to_dict(),
     }
 

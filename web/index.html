@@ -514,6 +514,7 @@
     let ws = null;
     let pc = null;
     let statsInterval = null;
+    let heartbeatInterval = null;
     let lastBytesReceived = 0;
     let lastTimestamp = 0;
 
@@ -641,6 +642,15 @@
       ws.onopen = async () => {
         log('WebSocket signaling connected successfully!', 'success');
         setStatus(wsDot, wsText, 'connected', 'Connected');
+
+        // Start periodic heartbeat ping (keeps signaling active and verified)
+        if (heartbeatInterval) clearInterval(heartbeatInterval);
+        heartbeatInterval = setInterval(() => {
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'ping' }));
+          }
+        }, 15000);
+
         try {
           await createPeerConnection();
         } catch (pcErr) {
@@ -806,6 +816,10 @@
 
     function cleanup() {
       log('Cleaning up connection resources...', 'info');
+      if (heartbeatInterval) {
+        clearInterval(heartbeatInterval);
+        heartbeatInterval = null;
+      }
       if (statsInterval) clearInterval(statsInterval);
       if (animFrame) cancelAnimationFrame(animFrame);
       if (pc) {

@@ -4,8 +4,10 @@ AirBridge - Connection Manager
 Responsibilities:
     - Generates unique client IDs.
     - Manages peer connection lifecycles (connect, signaling, disconnect, cleanup).
-    - Coordinates AudioCapture start/stop based on active subscriber count.
+    - Coordinates AudioCapture start/stop race-safely via serialized lifecycle locking.
     - Tracks connection state, heartbeats, and peer telemetry.
+    - Distinguishes active WebRTC media sessions from stale signaling channels.
+    - Manages AudioCapture error handling, bounded recovery, and health status.
     - Supports multiple simultaneous listeners on a single audio capture pipeline.
     - Manages periodic background cleanup for stale/dead sessions.
 """
@@ -15,7 +17,7 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Any
 
 from aiortc import RTCPeerConnection
 
@@ -60,6 +62,8 @@ class ConnectionManager:
     Thread-safe and async-safe manager for WebRTC peers and capture lifecycle.
     """
 
+    MAX_CAPTURE_RETRIES: int = 3
+
     def __init__(
         self,
         audio_pipeline: Optional[AudioPipeline] = None,
@@ -67,15 +71,128 @@ class ConnectionManager:
     ) -> None:
         self.pipeline = audio_pipeline or pipeline
         self.capture = audio_capture or AudioCapture(
-            on_frame=self.pipeline.publish_pcm
+            on_frame=self.pipeline.publish_pcm,
+            on_error=self._handle_capture_error,
         )
+        # If an externally-created AudioCapture was passed, wire on_error if not set
+        if hasattr(self.capture, "on_error") and self.capture.on_error is None:
+            self.capture.on_error = self._handle_capture_error
+
         self._clients: Dict[str, ClientSession] = {}
         self._lock = asyncio.Lock()
+
+        # Dedicated serialized lifecycle lock for capture start/stop synchronization
+        self._capture_lifecycle_lock = asyncio.Lock()
+        self._capture_error: Optional[str] = None
+        self._capture_retry_count: int = 0
+
         self._cleanup_task: Optional[asyncio.Task] = None
 
     @property
     def client_count(self) -> int:
         return len(self._clients)
+
+    @property
+    def capture_error(self) -> Optional[str]:
+        return self._capture_error
+
+    def get_capture_health(self) -> Dict[str, Any]:
+        """Returns capture operational state for /health telemetry."""
+        if self._capture_error:
+            status = "error"
+        elif self.capture.is_running:
+            status = "running"
+        else:
+            status = "idle"
+
+        return {
+            "status": status,
+            "is_running": self.capture.is_running,
+            "device_name": getattr(self.capture, "device_name", "Unknown"),
+            "error": self._capture_error,
+            "retry_count": self._capture_retry_count,
+        }
+
+    def _handle_capture_error(self, error: Exception) -> None:
+        """Called when AudioCapture background thread encounters an error."""
+        err_msg = str(error)
+        logger.error("AudioCapture failure reported: %s", err_msg)
+        self._capture_error = err_msg
+
+        # Schedule bounded recovery attempt on the event loop if active clients exist
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+
+        if loop.is_running():
+            loop.create_task(self._attempt_capture_recovery())
+
+    async def _attempt_capture_recovery(self) -> None:
+        """Attempts bounded recovery of AudioCapture when listeners are waiting."""
+        async with self._capture_lifecycle_lock:
+            async with self._lock:
+                active_count = len(self._clients)
+
+            if active_count == 0:
+                logger.info("AudioCapture error with 0 clients; no restart needed.")
+                return
+
+            if self._capture_retry_count >= self.MAX_CAPTURE_RETRIES:
+                logger.error(
+                    "AudioCapture recovery limit reached (%d attempts). Marked in error state.",
+                    self.MAX_CAPTURE_RETRIES,
+                )
+                return
+
+            self._capture_retry_count += 1
+            backoff = 0.5 * self._capture_retry_count
+            logger.info(
+                "Attempting AudioCapture recovery in %.1fs (attempt %d/%d)...",
+                backoff,
+                self._capture_retry_count,
+                self.MAX_CAPTURE_RETRIES,
+            )
+            await asyncio.sleep(backoff)
+
+            async with self._lock:
+                if len(self._clients) == 0:
+                    return
+
+            try:
+                self.capture.start()
+                logger.info("AudioCapture successfully recovered on attempt %d.", self._capture_retry_count)
+                self._capture_error = None
+                self._capture_retry_count = 0
+            except Exception as retry_err:
+                logger.error("AudioCapture recovery attempt %d failed: %s", self._capture_retry_count, retry_err)
+                self._capture_error = str(retry_err)
+
+    async def _sync_capture_state(self) -> None:
+        """
+        Coordinates AudioCapture start/stop with active client count.
+        Serialized by _capture_lifecycle_lock to prevent start/stop race conditions.
+        """
+        async with self._capture_lifecycle_lock:
+            async with self._lock:
+                active_count = len(self._clients)
+
+            if active_count > 0:
+                if not self.capture.is_running:
+                    logger.info("Active clients present (%d). Starting audio capture.", active_count)
+                    try:
+                        self.capture.start()
+                        self._capture_error = None
+                        self._capture_retry_count = 0
+                    except Exception as e:
+                        logger.error("Failed to start audio capture: %s", e)
+                        self._capture_error = str(e)
+            else:
+                if self.capture.is_running:
+                    logger.info("No active clients remaining (0). Stopping audio capture.")
+                    self.capture.stop()
+                self._capture_error = None
+                self._capture_retry_count = 0
 
     async def register_client(
         self,
@@ -86,7 +203,7 @@ class ConnectionManager:
         """
         Registers a new client session.
         Rejects duplicate explicit client IDs and preserves existing live sessions.
-        If this is the first active client, automatically initiates audio capture.
+        Atomically updates client set and coordinates capture start without race conditions.
         """
         async with self._lock:
             if client_id is not None:
@@ -106,15 +223,6 @@ class ConnectionManager:
                 websocket=websocket,
             )
             self._clients[cid] = session
-            should_start_capture = (len(self._clients) == 1 and not self.capture.is_running)
-
-        # Trigger capture start outside lock
-        if should_start_capture:
-            logger.info("First client connected (%s). Starting audio capture.", cid)
-            try:
-                self.capture.start()
-            except Exception as e:
-                logger.error("Failed to start audio capture upon client connect: %s", e)
 
         logger.info(
             "Client registered: %s (%s). Total clients: %d",
@@ -122,13 +230,16 @@ class ConnectionManager:
             client_address,
             len(self._clients),
         )
+
+        # Coordinate capture start via lifecycle lock (handles concurrent disconnects safely)
+        await self._sync_capture_state()
         return session
 
     async def remove_client(self, client_id: str) -> None:
         """
         Closes and removes a client session safely.
         Separates atomic state removal from slow peer connection and capture shutdown.
-        If no clients remain, automatically stops audio capture to preserve CPU.
+        If no clients remain, automatically stops audio capture via serialized lifecycle sync.
         """
         async with self._lock:
             session = self._clients.pop(client_id, None)
@@ -137,7 +248,6 @@ class ConnectionManager:
                 return
             session.closed = True
             remaining_clients = len(self._clients)
-            should_stop_capture = (remaining_clients == 0 and self.capture.is_running)
 
         # Cleanup subscriber and peer connection outside the manager lock
         if session.subscriber:
@@ -155,12 +265,8 @@ class ConnectionManager:
             remaining_clients,
         )
 
-        # Stop capture outside lock if no clients remain
-        if should_stop_capture:
-            async with self._lock:
-                if len(self._clients) == 0 and self.capture.is_running:
-                    logger.info("No active clients remaining. Stopping audio capture.")
-                    self.capture.stop()
+        # Synchronize capture lifecycle (stops capture cleanly if remaining clients == 0)
+        await self._sync_capture_state()
 
     async def get_client(self, client_id: str) -> Optional[ClientSession]:
         async with self._lock:
@@ -185,15 +291,52 @@ class ConnectionManager:
                 if ice_state:
                     session.ice_state = ice_state
 
-    async def cleanup_stale_connections(self, max_idle_seconds: float = 300.0) -> int:
-        """Removes connections that have failed, closed, or timed out."""
+    async def cleanup_stale_connections(
+        self,
+        max_idle_seconds: float = 300.0,
+        negotiation_timeout: float = 60.0,
+    ) -> int:
+        """
+        Removes connections that have failed, closed, or timed out during initial signaling.
+        CRITICAL: Actively connected WebRTC audio sessions (connection_state == 'connected')
+        are NEVER pruned as stale, even if the signaling WebSocket is silent.
+        """
         now = time.time()
         to_remove = []
         async with self._lock:
             for cid, session in self._clients.items():
-                is_dead = session.connection_state in ("failed", "closed")
-                is_stale = (now - session.last_seen) > max_idle_seconds
-                if is_dead or is_stale:
+                # 1. Definitively dead states
+                is_dead = (
+                    session.connection_state in ("failed", "closed")
+                    or session.ice_state in ("failed", "closed")
+                )
+                if is_dead:
+                    to_remove.append(cid)
+                    continue
+
+                # 2. Active WebRTC media connection: actively streaming, NEVER prune!
+                is_webrtc_active = (
+                    session.connection_state == "connected"
+                    or session.ice_state in ("connected", "completed")
+                )
+                if is_webrtc_active:
+                    continue
+
+                # 3. Negotiation timeout: connected WebSocket but never established WebRTC
+                is_negotiating = session.connection_state in ("new", "connecting")
+                if is_negotiating and (now - session.connected_at) > negotiation_timeout:
+                    logger.warning(
+                        "Client %s negotiation timed out after %.1fs",
+                        cid,
+                        now - session.connected_at,
+                    )
+                    to_remove.append(cid)
+                    continue
+
+                # 4. Inactive signaling channel timeout for non-active peers
+                idle_time = now - session.last_seen
+                if idle_time > max_idle_seconds:
+                    logger.warning("Client %s inactive for %.1fs, marking as stale", cid, idle_time)
                     to_remove.append(cid)
 
         for cid in to_remove:
@@ -206,6 +349,7 @@ class ConnectionManager:
         self,
         interval_seconds: float = 15.0,
         max_idle_seconds: float = 300.0,
+        negotiation_timeout: float = 60.0,
     ) -> None:
         """Background coroutine periodically running cleanup_stale_connections."""
         logger.info(
@@ -216,7 +360,10 @@ class ConnectionManager:
         while True:
             try:
                 await asyncio.sleep(interval_seconds)
-                await self.cleanup_stale_connections(max_idle_seconds=max_idle_seconds)
+                await self.cleanup_stale_connections(
+                    max_idle_seconds=max_idle_seconds,
+                    negotiation_timeout=negotiation_timeout,
+                )
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -231,8 +378,7 @@ class ConnectionManager:
         for cid in cids:
             await self.remove_client(cid)
 
-        if self.capture.is_running:
-            self.capture.stop()
+        await self._sync_capture_state()
 
 
 # Global singleton connection manager
