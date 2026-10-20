@@ -12,6 +12,10 @@
 
 ---
 
+## 🎬 Demo
+
+> A short screen recording showing Windows audio playing through an iPhone/AirPods will be added here. Until then, the working flow has been verified manually on the maintainer’s devices.
+
 ## ⚡ What is AirBridge?
 
 **AirBridge** turns your iPhone and AirPods into wireless headphones for your Windows PC without purchasing Bluetooth dongles, proprietary receivers, or installing native apps on your phone.
@@ -142,6 +146,17 @@ AirBridge/
 
 ---
 
+## 🧪 Validation status
+
+- [x] Windows loopback capture produces live PCM frames.
+- [x] Standalone Opus encoder test produces real Opus packets.
+- [x] Live WebRTC audio playback verified in a desktop browser.
+- [x] Live Windows audio heard on iPhone Safari over the same Wi-Fi network.
+- [ ] Automated tests and repeatable end-to-end latency benchmarks.
+- [ ] Tested compatibility matrix across Windows/Python/iOS versions.
+
+These are maintainer-reported manual tests, not CI-certified compatibility guarantees.
+
 ## 🛠️ Architecture & Pipeline Details
 
 | Stage | Technology | Details |
@@ -164,6 +179,10 @@ AirBridge/
 - [ ] **v0.5.0:** **Dynamic Bitrate & Volume Normalization** — adaptive bitrate based on Wi-Fi link quality.
 
 ---
+
+## 🤝 Feedback and issues
+
+Bug reports, setup issues, and suggestions are welcome via [GitHub Issues](https://github.com/serozr/AirBridge/issues). Please include your Windows version, Python version, iOS version, browser, network setup, and relevant sanitized diagnostics. Do not attach private audio recordings or sensitive network information.
 
 ## 📄 License
 
