@@ -1,0 +1,7 @@
+soundcard
+numpy
+fastapi
+uvicorn[standard]
+websockets
+opuslib
+pyogg
