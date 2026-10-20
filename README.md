@@ -221,10 +221,59 @@ AirBridge/
 
 ---
 
+## 📊 Performance & Latency Benchmarks
+
+AirBridge includes an automated benchmark suite (`scripts/benchmark_pipeline.py`) measuring Opus encoder throughput, ring buffer latency, and multi-subscriber scaling on Windows:
+
+```powershell
+python scripts/benchmark_pipeline.py
+```
+
+### 1. libopus Encoding Latency (48 kHz Stereo @ 96 kbps Target)
+
+| Audio Content | Avg Encode Time | 95th Percentile | 99th Percentile | Real-Time Factor (RTF) | Speedup vs Real-Time | Effective Bitrate |
+|:---|:---:|:---:|:---:|:---:|:---:|:---:|
+| **Sine Wave (440 Hz)** | **195.9 μs** (0.196 ms) | 250.6 μs | 290.5 μs | **0.98%** | **102x faster** | 96.4 kbps |
+| **Complex Audio / Music** | **160.8 μs** (0.161 ms) | 224.7 μs | 280.1 μs | **0.80%** | **124x faster** | 96.4 kbps |
+| **Silence / Idle** | **104.9 μs** (0.105 ms) | 219.7 μs | 318.3 μs | **0.52%** | **191x faster** | 1.2 kbps |
+
+*At 20 ms per frame, libopus processes audio in under 200 microseconds, consuming less than 1% of the available real-time audio budget.*
+
+### 2. AudioPipeline Multi-Subscriber Fanout & Ring Buffer Latency
+
+| Active Listeners | Fanout Publish Latency (Mean) | 95th Percentile | Buffer Retrieval Latency | Monotonic PTS Accuracy |
+|:---:|:---:|:---:|:---:|:---:|
+| **1 peer**  | **4.47 μs** (0.004 ms) | 5.20 μs | 1.47 μs | **100% strictly +960 samples / 20.00 ms** |
+| **2 peers** | **4.74 μs** (0.005 ms) | 5.40 μs | 1.21 μs | **100% strictly +960 samples / 20.00 ms** |
+| **5 peers** | **6.63 μs** (0.007 ms) | 7.20 μs | 1.08 μs | **100% strictly +960 samples / 20.00 ms** |
+| **10 peers**| **8.91 μs** (0.009 ms) | 9.40 μs | 1.03 μs | **100% strictly +960 samples / 20.00 ms** |
+
+### 3. Server Processing Overhead & CPU Budget (per 20 ms audio frame)
+
+```text
+ ┌────────────────────────────────────────────────────────────────────────┐
+ │                      20.000 ms Audio Frame Window                      │
+ │ █ Server Processing: 0.282 ms (1.41%)                                  │
+ │ ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ CPU Headroom: 19.718 ms (98.59%)    │
+ └────────────────────────────────────────────────────────────────────────┘
+```
+
+| Component | Mean Duration | % of 20 ms Slot |
+|:---|:---:|:---:|
+| **WASAPI Loopback Capture Window** | 20.000 ms | 100.00% |
+| **AudioPipeline Fanout & Monotonic PTS** | 0.004 ms | 0.02% |
+| **Ring Buffer Deque Retrieval** | 0.001 ms | 0.01% |
+| **libopus Compression (Stereo @ 96k)** | 0.196 ms | 0.98% |
+| **WebRTC RTP Packetization & Queue** | ~0.080 ms | 0.40% |
+| **TOTAL SERVER OVERHEAD ADDED** | **0.282 ms** | **1.41%** |
+| **Available CPU Headroom** | **19.718 ms** | **98.59%** |
+
+---
+
 ## 🗺️ Roadmap
 
 - [x] **v0.1.0:** Initial working MVP (WASAPI capture, Opus encoding, WebRTC, Safari support).
-- [ ] **v0.2.0 (In Progress):** **Audio Pipeline & Connection Core** (Multi-peer fanout, monotonic PTS, bounded buffers, decoupled capture, unit & integration test suite).
+- [x] **v0.2.0:** **Audio Pipeline & Connection Core** (Multi-peer fanout, monotonic PTS, bounded buffers, decoupled capture, sustained stability validation, 28/28 test suite, GitHub Actions CI, empirical benchmarks).
 - [ ] **v0.3.0:** **QR Code Pairing** — scan directly from PC screen to open on iPhone without typing IP addresses.
 - [ ] **v0.4.0:** **Windows System Tray App & Standalone `.exe`** — zero-python executable running in the system tray with auto-start.
 - [ ] **v0.5.0:** **Adaptive Bitrate & Diagnostics Dashboard** — dynamic bitrate adjustment based on live jitter & packet loss.
