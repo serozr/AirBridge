@@ -1,9 +1,16 @@
-soundcard
-numpy
-fastapi
-uvicorn[standard]
-websockets
-opuslib
-pyogg
-aiortc
-av
+# Core Audio Capture & Processing
+soundcard>=0.4.6
+numpy>=2.0.0
+
+# Opus Encoding & Windows Bundled libopus
+opuslib>=3.0.1
+pyogg>=0.6.14a1
+
+# WebRTC & Media Engine
+aiortc>=1.15.0
+av>=17.0.0
+
+# Web Server & WebSocket Signaling
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+websockets>=13.0
