@@ -7,6 +7,7 @@
 [![Python](https://img.shields.io/badge/Python-3.12%20recommended-blue.svg)](https://www.python.org/)
 [![WebRTC](https://img.shields.io/badge/WebRTC-aiortc-brightgreen.svg)](https://github.com/aiortc/aiortc)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Open source](https://img.shields.io/badge/open%20source-MIT-blue.svg)](LICENSE)
 
 ## What is AirBridge?
 
