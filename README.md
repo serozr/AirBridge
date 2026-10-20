@@ -172,17 +172,12 @@ These are maintainer-reported manual tests, not CI-certified compatibility guara
 
 ## 🗺️ Roadmap
 
-- [x] **MVP:** Manually verified Windows-to-iPhone streaming over the same Wi-Fi network.
-- [ ] **v0.2.0:** **QR Code Pairing** — scan directly from PC screen to open on iPhone without typing IP addresses.
-- [ ] **v0.3.0:** **Windows System Tray App** — run in background with start on boot option.
-- [ ] **v0.4.0:** **Standalone `.exe` Release** — zero-python single file executable.
-- [ ] **v0.5.0:** **Dynamic Bitrate & Volume Normalization** — adaptive bitrate based on Wi-Fi link quality.
-
----
-
-## 🤝 Feedback and issues
-
-Bug reports, setup issues, and suggestions are welcome via [GitHub Issues](https://github.com/serozr/AirBridge/issues). Please include your Windows version, Python version, iOS version, browser, network setup, and relevant sanitized diagnostics. Do not attach private audio recordings or sensitive network information.
+- [x] **Working MVP:** Manually verified Windows-to-iPhone streaming over the same Wi-Fi network.
+- [ ] **QR Code Pairing:** Scan from the PC screen to open the receiver on iPhone without typing an IP address.
+- [ ] **Automated tests:** Add reproducible unit and end-to-end checks.
+- [ ] **Latency benchmark:** Measure end-to-end delay across multiple network and device configurations.
+- [ ] **Windows tray app and packaged build:** Easier start/stop and distribution.
+- [ ] **Adaptive bitrate and audio tuning:** Validate changes with measured packet loss, jitter, and listening tests.
 
 ## 📄 License
 
