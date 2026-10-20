@@ -93,59 +93,6 @@ Use the LAN URL printed by the server on your iPhone in Safari. Tap **Connect & 
 
 > If PowerShell blocks virtual-environment activation, run the venv interpreter directly instead: `.\.venv\Scripts\python.exe -m pip install -r requirements.txt` and `.\.venv\Scripts\python.exe -u server/webrtc_server.py`.
 
-## 🚀 Quick Start
-
-### 1. Prerequisites
-
-- **Windows 10 or Windows 11**
-- **64-bit Python on Windows**. The project has been exercised in the maintainer environment; other Python versions should be treated as unverified until tested.
-- **iPhone / iPad** connected to the same Wi-Fi network
-
-### 2. Installation
-
-Clone the repository and set up a virtual environment:
-
-```powershell
-git clone https://github.com/serozr/AirBridge.git
-cd AirBridge
-
-python -m venv .venv
-.\.venv\Scripts\activate
-pip install -r requirements.txt
-```
-
-> **Compatibility note:** Audio/WebRTC dependencies include native components. If installation fails on your Python version, try a supported 64-bit Python release and report the full pip error in an issue.
-
-### 3. Run the Server
-
-```powershell
-python -u server/webrtc_server.py
-```
-
-Upon launching, AirBridge prints the active local network address:
-
-```text
-==================================================================
-  AIRBRIDGE - Phase 4: Local Network & iPhone Streaming Server
-==================================================================
-  Local PC URL:      http://localhost:8000
-  Recommended LAN:   http://192.168.0.105:8000
-  Detected IPs:      192.168.0.105, ...
-------------------------------------------------------------------
-  >> On your iPhone (Safari connected to the same Wi-Fi):
-     Open: http://192.168.0.105:8000
-==================================================================
-```
-
-### 4. Connect with iPhone & AirPods
-
-1. Put on your **AirPods** (paired to your iPhone).
-2. Open **Safari** on your iPhone and navigate to the LAN URL displayed in the console (e.g., `http://192.168.0.105:8000`).
-3. Tap **▶ Connect & Stream**.
-4. Play audio on your PC. Once the connection status is active, the live system audio should play through the iPhone output (including connected AirPods).
-
----
-
 ## 🔐 Network and firewall notes
 
 AirBridge is designed for a trusted local network. The HTTP page and WebSocket signaling currently do not provide application-level authentication. Do not expose port 8000 to the public internet; use it only on a trusted LAN. Windows Firewall may need an inbound rule for TCP port 8000.
